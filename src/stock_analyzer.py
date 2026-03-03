@@ -18,13 +18,14 @@
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from enum import Enum
 
 import pandas as pd
 import numpy as np
 
 from src.config import get_config
+from data_provider.realtime_types import UnifiedRealtimeQuote, ChipDistribution
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,23 @@ class RSIStatus(Enum):
     OVERSOLD = "超卖"         # RSI < 30
 
 
+class ValuationStatus(Enum):
+    """估值状态枚举"""
+    VERY_CHEAP = "极度低估"    # PE < 10 或 PB < 1
+    CHEAP = "低估"            # PE < 15 或 PB < 1.5
+    FAIR = "合理"            # PE 15-25 或 PB 1.5-3
+    EXPENSIVE = "高估"        # PE > 25 或 PB > 3
+    VERY_EXPENSIVE = "极度高估" # PE > 40 或 PB > 5
+
+
+class ChipStatus(Enum):
+    """筹码状态枚举"""
+    VERY_CONCENTRATED = "高度集中"  # 90%集中度 < 15%
+    CONCENTRATED = "集中"          # 90%集中度 15-25%
+    NORMAL = "正常"               # 90%集中度 25-40%
+    DISPERSED = "分散"            # 90%集中度 > 40%
+
+
 @dataclass
 class TrendAnalysisResult:
     """趋势分析结果"""
@@ -125,6 +143,19 @@ class TrendAnalysisResult:
     rsi_24: float = 0.0             # RSI(24) 长期
     rsi_status: RSIStatus = RSIStatus.NEUTRAL
     rsi_signal: str = ""              # RSI 信号描述
+
+    # 估值分析
+    pe_ratio: Optional[float] = None      # 市盈率
+    pb_ratio: Optional[float] = None      # 市净率
+    valuation_status: ValuationStatus = ValuationStatus.FAIR
+    valuation_signal: str = ""            # 估值信号描述
+
+    # 筹码分布
+    profit_ratio: Optional[float] = None  # 获利比例
+    avg_cost: Optional[float] = None      # 平均成本
+    concentration_90: Optional[float] = None  # 90%筹码集中度
+    chip_status: ChipStatus = ChipStatus.NORMAL
+    chip_signal: str = ""                 # 筹码信号描述
 
     # 买入信号
     buy_signal: BuySignal = BuySignal.WAIT
@@ -202,13 +233,17 @@ class StockTrendAnalyzer:
         """初始化分析器"""
         pass
     
-    def analyze(self, df: pd.DataFrame, code: str) -> TrendAnalysisResult:
+    def analyze(self, df: pd.DataFrame, code: str, 
+                realtime_quote: Optional[UnifiedRealtimeQuote] = None,
+                chip_distribution: Optional[ChipDistribution] = None) -> TrendAnalysisResult:
         """
-        分析股票趋势
+        分析股票趋势（增强版）
         
         Args:
             df: 包含 OHLCV 数据的 DataFrame
             code: 股票代码
+            realtime_quote: 实时行情数据（可选）
+            chip_distribution: 筹码分布数据（可选）
             
         Returns:
             TrendAnalysisResult 分析结果
@@ -256,8 +291,16 @@ class StockTrendAnalyzer:
         # 6. RSI 分析
         self._analyze_rsi(df, result)
 
-        # 7. 生成买入信号
-        self._generate_signal(result)
+        # 7. 估值分析（如果提供实时行情）
+        if realtime_quote:
+            self._analyze_valuation(realtime_quote, result)
+
+        # 8. 筹码分析（如果提供筹码分布）
+        if chip_distribution:
+            self._analyze_chips(chip_distribution, result)
+
+        # 9. 生成买入信号（增强版）
+        self._generate_signal_enhanced(result)
 
         return result
     
@@ -580,6 +623,303 @@ class StockTrendAnalyzer:
             result.rsi_status = RSIStatus.OVERSOLD
             result.rsi_signal = f"⭐ RSI超卖({rsi_mid:.1f}<30)，反弹机会大"
 
+    def _analyze_valuation(self, realtime_quote: UnifiedRealtimeQuote, result: TrendAnalysisResult) -> None:
+        """
+        分析估值指标（PE/PB）
+        
+        估值判断标准：
+        - PE < 10 或 PB < 1：极度低估
+        - PE < 15 或 PB < 1.5：低估
+        - PE 15-25 或 PB 1.5-3：合理
+        - PE > 25 或 PB > 3：高估
+        - PE > 40 或 PB > 5：极度高估
+        """
+        pe = realtime_quote.pe_ratio
+        pb = realtime_quote.pb_ratio
+        
+        result.pe_ratio = pe
+        result.pb_ratio = pb
+        
+        if pe is None and pb is None:
+            result.valuation_signal = "无估值数据"
+            return
+        
+        # 判断估值状态
+        if (pe is not None and pe < 10) or (pb is not None and pb < 1):
+            result.valuation_status = ValuationStatus.VERY_CHEAP
+            result.valuation_signal = "⭐ 极度低估"
+        elif (pe is not None and pe < 15) or (pb is not None and pb < 1.5):
+            result.valuation_status = ValuationStatus.CHEAP
+            result.valuation_signal = "✅ 低估"
+        elif (pe is not None and pe > 40) or (pb is not None and pb > 5):
+            result.valuation_status = ValuationStatus.VERY_EXPENSIVE
+            result.valuation_signal = "⚠️ 极度高估"
+        elif (pe is not None and pe > 25) or (pb is not None and pb > 3):
+            result.valuation_status = ValuationStatus.EXPENSIVE
+            result.valuation_signal = "⚡ 高估"
+        else:
+            result.valuation_status = ValuationStatus.FAIR
+            result.valuation_signal = " 估值合理"
+        
+        # 添加详细描述
+        pe_str = f"PE={pe:.1f}" if pe else "PE=无"
+        pb_str = f"PB={pb:.2f}" if pb else "PB=无"
+        result.valuation_signal += f" ({pe_str}, {pb_str})"
+
+    def _analyze_chips(self, chip_distribution: ChipDistribution, result: TrendAnalysisResult) -> None:
+        """
+        分析筹码分布
+        
+        筹码集中度判断标准：
+        - 90%集中度 < 15%：高度集中
+        - 90%集中度 15-25%：集中
+        - 90%集中度 25-40%：正常
+        - 90%集中度 > 40%：分散
+        """
+        result.profit_ratio = chip_distribution.profit_ratio
+        result.avg_cost = chip_distribution.avg_cost
+        result.concentration_90 = chip_distribution.concentration_90
+        
+        if chip_distribution.concentration_90 is None:
+            result.chip_signal = "无筹码数据"
+            return
+        
+        # 判断筹码状态
+        conc = chip_distribution.concentration_90
+        if conc < 0.15:
+            result.chip_status = ChipStatus.VERY_CONCENTRATED
+            result.chip_signal = "🔒 筹码高度集中"
+        elif conc < 0.25:
+            result.chip_status = ChipStatus.CONCENTRATED
+            result.chip_signal = "✅ 筹码集中"
+        elif conc < 0.40:
+            result.chip_status = ChipStatus.NORMAL
+            result.chip_signal = " 筹码正常"
+        else:
+            result.chip_status = ChipStatus.DISPERSED
+            result.chip_signal = "⚠️ 筹码分散"
+        
+        # 添加获利比例信息
+        if chip_distribution.profit_ratio is not None:
+            profit_pct = chip_distribution.profit_ratio * 100
+            result.chip_signal += f" (获利比例={profit_pct:.1f}%)"
+        
+        # 添加成本与现价关系
+        if chip_distribution.avg_cost and result.current_price:
+            cost_diff = (result.current_price - chip_distribution.avg_cost) / chip_distribution.avg_cost * 100
+            if cost_diff > 10:
+                result.chip_signal += f"，现价高于成本{cost_diff:.1f}%"
+            elif cost_diff < -10:
+                result.chip_signal += f"，现价低于成本{abs(cost_diff):.1f}%"
+            else:
+                result.chip_signal += f"，现价接近成本"
+
+    def _generate_signal_enhanced(self, result: TrendAnalysisResult) -> None:
+        """
+        生成买入信号（增强版，包含估值和筹码分析）
+        
+        综合评分系统（120分制）：
+        - 趋势（30分）：多头排列得分高
+        - 乖离率（20分）：接近 MA5 得分高
+        - 量能（15分）：缩量回调得分高
+        - 支撑（10分）：获得均线支撑得分高
+        - MACD（15分）：金叉和多头得分高
+        - RSI（10分）：超卖和强势得分高
+        - 估值（10分）：低估得分高
+        - 筹码（10分）：集中且获利比例适中得分高
+        """
+        score = 0
+        reasons = []
+        risks = []
+
+        # === 趋势评分（30分）===
+        trend_scores = {
+            TrendStatus.STRONG_BULL: 30,
+            TrendStatus.BULL: 26,
+            TrendStatus.WEAK_BULL: 18,
+            TrendStatus.CONSOLIDATION: 12,
+            TrendStatus.WEAK_BEAR: 8,
+            TrendStatus.BEAR: 4,
+            TrendStatus.STRONG_BEAR: 0,
+        }
+        trend_score = trend_scores.get(result.trend_status, 12)
+        score += trend_score
+
+        if result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL]:
+            reasons.append(f"✅ {result.trend_status.value}，顺势做多")
+        elif result.trend_status in [TrendStatus.BEAR, TrendStatus.STRONG_BEAR]:
+            risks.append(f"⚠️ {result.trend_status.value}，不宜做多")
+
+        # === 乖离率评分（20分，强势趋势补偿）===
+        bias = result.bias_ma5
+        if bias != bias or bias is None:  # NaN or None defense
+            bias = 0.0
+        base_threshold = get_config().bias_threshold
+
+        # Strong trend compensation: relax threshold for STRONG_BULL with high strength
+        trend_strength = result.trend_strength if result.trend_strength == result.trend_strength else 0.0
+        if result.trend_status == TrendStatus.STRONG_BULL and (trend_strength or 0) >= 70:
+            effective_threshold = base_threshold * 1.5
+            is_strong_trend = True
+        else:
+            effective_threshold = base_threshold
+            is_strong_trend = False
+
+        if bias < 0:
+            # Price below MA5 (pullback)
+            if bias > -3:
+                score += 20
+                reasons.append(f"✅ 价格略低于MA5({bias:.1f}%)，回踩买点")
+            elif bias > -5:
+                score += 16
+                reasons.append(f"✅ 价格回踩MA5({bias:.1f}%)，观察支撑")
+            else:
+                score += 8
+                risks.append(f"⚠️ 乖离率过大({bias:.1f}%)，可能破位")
+        elif bias < 2:
+            score += 18
+            reasons.append(f"✅ 价格贴近MA5({bias:.1f}%)，介入好时机")
+        elif bias < base_threshold:
+            score += 14
+            reasons.append(f"⚡ 价格略高于MA5({bias:.1f}%)，可小仓介入")
+        elif bias > effective_threshold:
+            score += 4
+            risks.append(
+                f"❌ 乖离率过高({bias:.1f}%>{effective_threshold:.1f}%)，严禁追高！"
+            )
+        elif bias > base_threshold and is_strong_trend:
+            score += 10
+            reasons.append(
+                f"⚡ 强势趋势中乖离率偏高({bias:.1f}%)，可轻仓追踪"
+            )
+        else:
+            score += 4
+            risks.append(
+                f"❌ 乖离率过高({bias:.1f}%>{base_threshold:.1f}%)，严禁追高！"
+            )
+
+        # === 量能评分（15分）===
+        volume_scores = {
+            VolumeStatus.SHRINK_VOLUME_DOWN: 15,  # 缩量回调最佳
+            VolumeStatus.HEAVY_VOLUME_UP: 12,     # 放量上涨次之
+            VolumeStatus.NORMAL: 10,
+            VolumeStatus.SHRINK_VOLUME_UP: 6,     # 无量上涨较差
+            VolumeStatus.HEAVY_VOLUME_DOWN: 0,    # 放量下跌最差
+        }
+        vol_score = volume_scores.get(result.volume_status, 8)
+        score += vol_score
+
+        if result.volume_status == VolumeStatus.SHRINK_VOLUME_DOWN:
+            reasons.append("✅ 缩量回调，主力洗盘")
+        elif result.volume_status == VolumeStatus.HEAVY_VOLUME_DOWN:
+            risks.append("⚠️ 放量下跌，注意风险")
+
+        # === 支撑评分（10分）===
+        if result.support_ma5:
+            score += 5
+            reasons.append("✅ MA5支撑有效")
+        if result.support_ma10:
+            score += 5
+            reasons.append("✅ MA10支撑有效")
+
+        # === MACD 评分（15分）===
+        macd_scores = {
+            MACDStatus.GOLDEN_CROSS_ZERO: 15,  # 零轴上金叉最强
+            MACDStatus.GOLDEN_CROSS: 12,      # 金叉
+            MACDStatus.CROSSING_UP: 10,       # 上穿零轴
+            MACDStatus.BULLISH: 8,            # 多头
+            MACDStatus.BEARISH: 2,            # 空头
+            MACDStatus.CROSSING_DOWN: 0,       # 下穿零轴
+            MACDStatus.DEATH_CROSS: 0,        # 死叉
+        }
+        macd_score = macd_scores.get(result.macd_status, 5)
+        score += macd_score
+
+        if result.macd_status in [MACDStatus.GOLDEN_CROSS_ZERO, MACDStatus.GOLDEN_CROSS]:
+            reasons.append(f"✅ {result.macd_signal}")
+        elif result.macd_status in [MACDStatus.DEATH_CROSS, MACDStatus.CROSSING_DOWN]:
+            risks.append(f"⚠️ {result.macd_signal}")
+        else:
+            reasons.append(result.macd_signal)
+
+        # === RSI 评分（10分）===
+        rsi_scores = {
+            RSIStatus.OVERSOLD: 10,       # 超卖最佳
+            RSIStatus.STRONG_BUY: 8,     # 强势
+            RSIStatus.NEUTRAL: 5,        # 中性
+            RSIStatus.WEAK: 3,            # 弱势
+            RSIStatus.OVERBOUGHT: 0,       # 超买最差
+        }
+        rsi_score = rsi_scores.get(result.rsi_status, 5)
+        score += rsi_score
+
+        if result.rsi_status in [RSIStatus.OVERSOLD, RSIStatus.STRONG_BUY]:
+            reasons.append(f"✅ {result.rsi_signal}")
+        elif result.rsi_status == RSIStatus.OVERBOUGHT:
+            risks.append(f"⚠️ {result.rsi_signal}")
+        else:
+            reasons.append(result.rsi_signal)
+
+        # === 估值评分（10分）===
+        if result.valuation_status == ValuationStatus.VERY_CHEAP:
+            score += 10
+            reasons.append(f"✅ {result.valuation_signal}")
+        elif result.valuation_status == ValuationStatus.CHEAP:
+            score += 8
+            reasons.append(f"✅ {result.valuation_signal}")
+        elif result.valuation_status == ValuationStatus.FAIR:
+            score += 5
+            reasons.append(result.valuation_signal)
+        elif result.valuation_status == ValuationStatus.EXPENSIVE:
+            score += 2
+            risks.append(f"⚠️ {result.valuation_signal}")
+        elif result.valuation_status == ValuationStatus.VERY_EXPENSIVE:
+            score += 0
+            risks.append(f"❌ {result.valuation_signal}")
+        else:
+            # 无估值数据
+            score += 3
+            reasons.append("估值数据缺失")
+
+        # === 筹码评分（10分）===
+        if result.chip_status == ChipStatus.VERY_CONCENTRATED:
+            score += 10
+            reasons.append(f"✅ {result.chip_signal}")
+        elif result.chip_status == ChipStatus.CONCENTRATED:
+            score += 8
+            reasons.append(f"✅ {result.chip_signal}")
+        elif result.chip_status == ChipStatus.NORMAL:
+            score += 5
+            reasons.append(result.chip_signal)
+        elif result.chip_status == ChipStatus.DISPERSED:
+            score += 2
+            risks.append(f"⚠️ {result.chip_signal}")
+        else:
+            # 无筹码数据
+            score += 3
+            reasons.append("筹码数据缺失")
+
+        # === 综合判断（120分制转换为100分制）===
+        # 将120分制转换为100分制
+        normalized_score = int(score * 100 / 120)
+        result.signal_score = normalized_score
+        result.signal_reasons = reasons
+        result.risk_factors = risks
+
+        # 生成买入信号（基于100分制）
+        if normalized_score >= 75 and result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL]:
+            result.buy_signal = BuySignal.STRONG_BUY
+        elif normalized_score >= 60 and result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL, TrendStatus.WEAK_BULL]:
+            result.buy_signal = BuySignal.BUY
+        elif normalized_score >= 45:
+            result.buy_signal = BuySignal.HOLD
+        elif normalized_score >= 30:
+            result.buy_signal = BuySignal.WAIT
+        elif result.trend_status in [TrendStatus.BEAR, TrendStatus.STRONG_BEAR]:
+            result.buy_signal = BuySignal.STRONG_SELL
+        else:
+            result.buy_signal = BuySignal.SELL
+
     def _generate_signal(self, result: TrendAnalysisResult) -> None:
         """
         生成买入信号
@@ -745,7 +1085,7 @@ class StockTrendAnalyzer:
     
     def format_analysis(self, result: TrendAnalysisResult) -> str:
         """
-        格式化分析结果为文本
+        格式化分析结果为文本（增强版）
 
         Args:
             result: 分析结果
@@ -781,10 +1121,32 @@ class StockTrendAnalyzer:
             f"   RSI(12): {result.rsi_12:.1f}",
             f"   RSI(24): {result.rsi_24:.1f}",
             f"   信号: {result.rsi_signal}",
-            f"",
-            f"🎯 操作建议: {result.buy_signal.value}",
-            f"   综合评分: {result.signal_score}/100",
         ]
+
+        # 估值分析（如果有数据）
+        if result.pe_ratio is not None or result.pb_ratio is not None:
+            lines.append(f"")
+            lines.append(f"💰 估值分析: {result.valuation_status.value}")
+            pe_str = f"PE={result.pe_ratio:.1f}" if result.pe_ratio else "PE=无"
+            pb_str = f"PB={result.pb_ratio:.2f}" if result.pb_ratio else "PB=无"
+            lines.append(f"   {pe_str}, {pb_str}")
+            lines.append(f"   信号: {result.valuation_signal}")
+
+        # 筹码分析（如果有数据）
+        if result.profit_ratio is not None or result.concentration_90 is not None:
+            lines.append(f"")
+            lines.append(f"🎯 筹码分析: {result.chip_status.value}")
+            if result.profit_ratio is not None:
+                lines.append(f"   获利比例: {result.profit_ratio*100:.1f}%")
+            if result.avg_cost is not None:
+                lines.append(f"   平均成本: {result.avg_cost:.2f}")
+            if result.concentration_90 is not None:
+                lines.append(f"   90%集中度: {result.concentration_90*100:.1f}%")
+            lines.append(f"   信号: {result.chip_signal}")
+
+        lines.append(f"")
+        lines.append(f"🎯 操作建议: {result.buy_signal.value}")
+        lines.append(f"   综合评分: {result.signal_score}/100")
 
         if result.signal_reasons:
             lines.append(f"")
