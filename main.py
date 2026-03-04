@@ -269,8 +269,12 @@ def run_full_analysis(
     这是定时任务调用的主函数
     """
     try:
+        # 使用配置的股票列表
+        if stock_codes is None:
+            stock_codes = config.stock_list
+        
         # Issue #373: Trading day filter (per-stock, per-market)
-        effective_codes = stock_codes if stock_codes is not None else config.stock_list
+        effective_codes = stock_codes
         filtered_codes, effective_region, should_skip = _compute_trading_day_filter(
             config, args, effective_codes
         )

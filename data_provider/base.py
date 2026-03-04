@@ -16,6 +16,7 @@
 
 import logging
 import random
+import threading
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -36,6 +37,171 @@ logger = logging.getLogger(__name__)
 
 # === 标准化列名定义 ===
 STANDARD_COLUMNS = ['date', 'open', 'high', 'low', 'close', 'volume', 'amount', 'pct_chg']
+
+
+# === 速率限制器 ===
+class RateLimiter:
+    """
+    Unified API request rate limiter using token bucket algorithm.
+
+    Features:
+    - Thread-safe implementation
+    - Configurable calls per minute and minimum interval
+    - Supports burst requests up to bucket capacity
+    - Automatic token replenishment
+
+    Usage:
+        limiter = RateLimiter(calls_per_minute=60, min_interval=0.5)
+        limiter.acquire()  # Block until a token is available
+        # ... make API request ...
+    """
+
+    def __init__(
+        self,
+        calls_per_minute: int = 60,
+        min_interval: float = 0.0,
+        name: str = "RateLimiter"
+    ):
+        """
+        Initialize the rate limiter.
+
+        Args:
+            calls_per_minute: Maximum calls allowed per minute (default: 60)
+            min_interval: Minimum interval between calls in seconds (default: 0.0)
+            name: Name for logging purposes
+        """
+        self.calls_per_minute = calls_per_minute
+        self.min_interval = min_interval
+        self.name = name
+
+        # Token bucket parameters
+        self._tokens = float(calls_per_minute)  # Start with full bucket
+        self._max_tokens = float(calls_per_minute)
+        self._refill_rate = calls_per_minute / 60.0  # Tokens per second
+
+        # Timing tracking
+        self._last_refill_time = time.time()
+        self._last_request_time: Optional[float] = None
+
+        # Thread lock for safety
+        self._lock = threading.Lock()
+
+        logger.debug(
+            f"[{self.name}] Initialized: {calls_per_minute} calls/min, "
+            f"min_interval={min_interval}s"
+        )
+
+    def _refill_tokens(self) -> None:
+        """Refill tokens based on elapsed time."""
+        now = time.time()
+        elapsed = now - self._last_refill_time
+
+        if elapsed > 0:
+            new_tokens = elapsed * self._refill_rate
+            self._tokens = min(self._max_tokens, self._tokens + new_tokens)
+            self._last_refill_time = now
+
+    def acquire(self, timeout: Optional[float] = None) -> bool:
+        """
+        Acquire permission to make a request.
+
+        This method will block until:
+        1. A token is available (rate limit not exceeded)
+        2. Minimum interval has passed since last request
+
+        Args:
+            timeout: Maximum time to wait in seconds (None = wait forever)
+
+        Returns:
+            True if acquired, False if timeout exceeded
+        """
+        start_time = time.time()
+
+        while True:
+            with self._lock:
+                # Refill tokens
+                self._refill_tokens()
+
+                now = time.time()
+
+                # Check minimum interval
+                if self._last_request_time is not None and self.min_interval > 0:
+                    time_since_last = now - self._last_request_time
+                    if time_since_last < self.min_interval:
+                        wait_time = self.min_interval - time_since_last
+                        logger.debug(
+                            f"[{self.name}] Min interval not met, "
+                            f"waiting {wait_time:.2f}s"
+                        )
+                    else:
+                        wait_time = 0
+                else:
+                    wait_time = 0
+
+                # Check if we have tokens
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    self._last_request_time = now
+                    logger.debug(
+                        f"[{self.name}] Token acquired, "
+                        f"remaining: {self._tokens:.1f}/{self._max_tokens:.0f}"
+                    )
+                    return True
+
+                # Calculate wait time for token refill
+                tokens_needed = 1.0 - self._tokens
+                refill_wait = tokens_needed / self._refill_rate
+                total_wait = max(wait_time, refill_wait)
+
+                # Check timeout
+                if timeout is not None:
+                    elapsed = now - start_time
+                    if elapsed + total_wait > timeout:
+                        return False
+
+                logger.debug(
+                    f"[{self.name}] Rate limit reached, "
+                    f"waiting {total_wait:.2f}s for token refill"
+                )
+
+            # Sleep outside the lock
+            time.sleep(total_wait)
+
+    def try_acquire(self) -> bool:
+        """
+        Try to acquire without blocking.
+
+        Returns:
+            True if acquired, False if would need to wait
+        """
+        with self._lock:
+            self._refill_tokens()
+
+            now = time.time()
+
+            # Check minimum interval
+            if self._last_request_time is not None and self.min_interval > 0:
+                if now - self._last_request_time < self.min_interval:
+                    return False
+
+            if self._tokens >= 1.0:
+                self._tokens -= 1.0
+                self._last_request_time = now
+                return True
+
+            return False
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get current rate limiter status."""
+        with self._lock:
+            self._refill_tokens()
+            return {
+                'name': self.name,
+                'tokens_available': round(self._tokens, 2),
+                'max_tokens': self._max_tokens,
+                'calls_per_minute': self.calls_per_minute,
+                'min_interval': self.min_interval,
+            }
 
 
 def normalize_stock_code(stock_code: str) -> str:

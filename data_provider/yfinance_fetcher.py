@@ -15,6 +15,7 @@ YfinanceFetcher - 兜底数据源 (Priority 4)
 """
 
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -28,10 +29,9 @@ from tenacity import (
     before_sleep_log,
 )
 
-from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS
+from .base import BaseFetcher, DataFetchError, RateLimiter, STANDARD_COLUMNS
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource
 from .us_index_mapping import get_us_index_yf_symbol, is_us_index_code, is_us_stock_code
-import os
 
 logger = logging.getLogger(__name__)
 
@@ -47,19 +47,46 @@ class YfinanceFetcher(BaseFetcher):
     - 自动转换股票代码格式
     - 处理时区和数据格式差异
     - 失败后指数退避重试
+    - 统一的速率限制（60次/分钟）
     
     注意事项：
     - A 股数据可能有延迟
     - 某些股票可能无数据
     - 数据精度可能与国内源略有差异
+    
+    Rate Limiting:
+    - Default: 60 calls/min, min_interval=1.0s (Yahoo Finance has API limits)
+    - Configurable via YFINANCE_RATE_LIMIT and YFINANCE_MIN_INTERVAL env vars
     """
     
     name = "YfinanceFetcher"
     priority = int(os.getenv("YFINANCE_PRIORITY", "4"))
     
+    # Rate limiting configuration
+    # Yahoo Finance has stricter limits, so we use a conservative default
+    DEFAULT_RATE_LIMIT = 60  # calls per minute
+    DEFAULT_MIN_INTERVAL = 1.0  # seconds between calls
+    
     def __init__(self):
-        """初始化 YfinanceFetcher"""
-        pass
+        """
+        Initialize YfinanceFetcher with rate limiting.
+        
+        Rate limit is configurable via environment variables:
+        - YFINANCE_RATE_LIMIT: calls per minute (default: 60)
+        - YFINANCE_MIN_INTERVAL: minimum seconds between calls (default: 1.0)
+        """
+        # Initialize rate limiter
+        rate_limit = int(os.getenv("YFINANCE_RATE_LIMIT", str(self.DEFAULT_RATE_LIMIT)))
+        min_interval = float(os.getenv("YFINANCE_MIN_INTERVAL", str(self.DEFAULT_MIN_INTERVAL)))
+        self._rate_limiter = RateLimiter(
+            calls_per_minute=rate_limit,
+            min_interval=min_interval,
+            name="YfinanceFetcher"
+        )
+        logger.info(
+            f"[YfinanceFetcher] Rate limiter initialized: "
+            f"{rate_limit} calls/min, min_interval={min_interval}s"
+        )
     
     def _convert_stock_code(self, stock_code: str) -> str:
         """
@@ -141,11 +168,15 @@ class YfinanceFetcher(BaseFetcher):
         使用 yfinance.download() 获取历史数据
         
         流程：
-        1. 转换股票代码格式
-        2. 调用 yfinance API
-        3. 处理返回数据
+        1. 应用速率限制
+        2. 转换股票代码格式
+        3. 调用 yfinance API
+        4. 处理返回数据
         """
         import yfinance as yf
+        
+        # Apply rate limiting
+        self._rate_limiter.acquire()
         
         # 转换代码格式
         yf_code = self._convert_stock_code(stock_code)

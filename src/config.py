@@ -196,6 +196,15 @@ class Config:
     http_proxy: Optional[str] = None  # HTTP 代理 (例如: http://127.0.0.1:10809)
     https_proxy: Optional[str] = None # HTTPS 代理
     
+    # === 热门股与龙虎榜配置 ===
+    hot_stocks_count: int = 20  # 热门股数量（涨幅榜前N只）
+    lhb_days: int = 1  # 龙虎榜天数（最近N天）
+    
+    # === 时间范围配置 ===
+    historical_data_days: int = 30  # 历史数据天数（默认30天）
+    trend_analysis_window: int = 60  # 趋势分析窗口（天）
+    max_historical_days: int = 365  # 最大历史数据天数
+    
     # === 定时任务配置 ===
     schedule_enabled: bool = False            # 是否启用定时任务
     schedule_time: str = "18:00"              # 每日推送时间（HH:MM 格式）
@@ -511,6 +520,10 @@ class Config:
             telegram_webhook_secret=os.getenv('TELEGRAM_WEBHOOK_SECRET'),
             # Discord 机器人扩展配置
             discord_bot_status=os.getenv('DISCORD_BOT_STATUS', 'A股智能分析 | /help'),
+            # 时间范围配置
+            historical_data_days=int(os.getenv('HISTORICAL_DATA_DAYS', '30')),
+            trend_analysis_window=int(os.getenv('TREND_ANALYSIS_WINDOW', '60')),
+            max_historical_days=int(os.getenv('MAX_HISTORICAL_DAYS', '365')),
             # 实时行情增强数据配置
             enable_realtime_quote=os.getenv('ENABLE_REALTIME_QUOTE', 'true').lower() == 'true',
             enable_realtime_technical_indicators=os.getenv(

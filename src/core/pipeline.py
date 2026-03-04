@@ -133,9 +133,10 @@ class StockAnalysisPipeline:
                 logger.info(f"[{code}] 今日数据已存在，跳过获取（断点续传）")
                 return True, None
             
-            # 从数据源获取数据
-            logger.info(f"[{code}] 开始从数据源获取数据...")
-            df, source_name = self.fetcher_manager.get_daily_data(code, days=30)
+            # 从数据源获取数据（使用配置的扩展时间范围）
+            historical_days = self.config.historical_data_days
+            logger.info(f"[{code}] 开始从数据源获取数据（{historical_days}天）...")
+            df, source_name = self.fetcher_manager.get_daily_data(code, days=historical_days)
             
             if df is None or df.empty:
                 return False, "获取数据为空"

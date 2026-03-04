@@ -1,0 +1,110 @@
+# BOLL + KDJ 组合策略
+# 利用布林带和 KDJ 指标的组合信号进行交易决策
+# 
+# 策略逻辑：
+# 1. 布林带下轨附近 + KDJ 金叉/超卖 = 强买入信号
+# 2. 布林带上轨附近 + KDJ 死叉/超买 = 卖出信号
+# 3. 布林带带宽收窄 = 变盘预警
+
+name: "BOLL+KDJ组合策略"
+version: "1.0"
+description: "利用布林带和KDJ指标组合判断买卖点"
+
+# 指标参数配置
+indicators:
+  boll:
+    period: 20
+    std_dev: 2.0
+  kdj:
+    n: 9
+    m1: 3
+    m2: 3
+
+# 入场条件
+entry_conditions:
+  # 强买入条件（满足任意一个）
+  strong_buy:
+    - condition: "price <= boll_lower * 1.02 AND kdj_k < 20 AND kdj_d < 20"
+      description: "触及下轨且KDJ超卖"
+      score_boost: 15
+    - condition: "price <= boll_lower * 1.05 AND kdj_golden_cross AND kdj_k < 30"
+      description: "下轨附近低位金叉"
+      score_boost: 12
+    - condition: "kdj_j < 0 AND price <= boll_lower"
+      description: "J值极端超卖+跌破下轨"
+      score_boost: 10
+
+  # 普通买入条件
+  buy:
+    - condition: "price > boll_mid AND price < boll_mid * 1.02 AND kdj_golden_cross"
+      description: "中轨附近金叉"
+      score_boost: 8
+    - condition: "boll_width < 0.10 AND kdj_k > kdj_d"
+      description: "带宽收窄变盘+K线在D线上方"
+      score_boost: 6
+    - condition: "price > boll_lower AND price < boll_mid AND kdj_oversold"
+      description: "下轨与中轨之间+KDJ超卖"
+      score_boost: 5
+
+# 出场条件
+exit_conditions:
+  # 强卖出条件
+  strong_sell:
+    - condition: "price >= boll_upper * 0.98 AND kdj_k > 80 AND kdj_d > 80"
+      description: "触及上轨且KDJ超买"
+      score_penalty: 15
+    - condition: "price >= boll_upper AND kdj_death_cross"
+      description: "上轨附近死叉"
+      score_penalty: 12
+    - condition: "kdj_j > 100 AND price >= boll_upper"
+      description: "J值极端超买+突破上轨"
+      score_penalty: 10
+
+  # 普通卖出条件
+  sell:
+    - condition: "price < boll_mid AND price > boll_mid * 0.98 AND kdj_death_cross"
+      description: "中轨附近死叉"
+      score_penalty: 8
+    - condition: "boll_width < 0.10 AND kdj_k < kdj_d"
+      description: "带宽收窄变盘+K线在D线下方"
+      score_penalty: 6
+
+# 风险控制
+risk_control:
+  # 止损条件
+  stop_loss:
+    - condition: "price < boll_lower * 0.95"
+      description: "跌破下轨5%"
+      action: "止损"
+    - condition: "kdj_k < 10 AND kdj_d < 10"
+      description: "KDJ极度超卖"
+      action: "观察"
+
+  # 止盈条件
+  take_profit:
+    - condition: "price > boll_upper * 1.02"
+      description: "突破上轨2%"
+      action: "减仓"
+    - condition: "kdj_k > 85 AND kdj_d > 80"
+      description: "KDJ进入超买区"
+      action: "关注"
+
+# 信号强度权重
+signal_weights:
+  boll_position: 0.35      # 布林带位置权重
+  kdj_signal: 0.35         # KDJ信号权重
+  boll_width: 0.15         # 带宽权重
+  trend_alignment: 0.15    # 趋势一致性权重
+
+# 辅助指标
+auxiliary:
+  - name: "MACD"
+    purpose: "趋势确认"
+    condition: "macd_dif > macd_dea 增强买入信号"
+  - name: "RSI"
+    purpose: "超买超卖确认"
+    condition: "rsi < 30 增强超卖信号，rsi > 70 增强超买信号"
+  - name: "Volume"
+    purpose: "量能确认"
+    condition: "缩量下跌后放量上涨更可靠"
++++++++ REPLACE

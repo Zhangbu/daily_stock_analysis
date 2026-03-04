@@ -707,6 +707,7 @@ class NotificationService:
             "",
         ]
 
+
         # === 新增：分析结果摘要 (Issue #112) ===
         if results:
             report_lines.extend([
@@ -1229,6 +1230,7 @@ class NotificationService:
         if info_added:
             lines.append("")
         
+        
         # 狙击点位
         sniper = battle.get('sniper_points', {}) if battle else {}
         if sniper:
@@ -1261,6 +1263,7 @@ class NotificationService:
         ])
         
         return "\n".join(lines)
+    
 
     # Display name mapping for realtime data sources
     _SOURCE_DISPLAY_NAMES = {

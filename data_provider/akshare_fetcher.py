@@ -42,7 +42,7 @@ from tenacity import (
 
 from patch.eastmoney_patch import eastmoney_patch
 from src.config import get_config
-from .base import BaseFetcher, DataFetchError, RateLimitError, STANDARD_COLUMNS
+from .base import BaseFetcher, DataFetchError, RateLimitError, RateLimiter, STANDARD_COLUMNS
 from .realtime_types import (
     UnifiedRealtimeQuote, ChipDistribution, RealtimeSource,
     get_realtime_circuit_breaker, get_chip_circuit_breaker,
@@ -181,22 +181,50 @@ class AkshareFetcher(BaseFetcher):
     - 每次请求前随机休眠 2.0-5.0 秒
     - 随机 User-Agent 轮换
     - 失败后指数退避重试（最多3次）
+    - 统一的速率限制（30次/分钟）
+    
+    Rate Limiting:
+    - Default: 30 calls/min, min_interval=2.0s (conservative for web scraping)
+    - Configurable via AKSHARE_RATE_LIMIT and AKSHARE_MIN_INTERVAL env vars
     """
     
     name = "AkshareFetcher"
     priority = int(os.getenv("AKSHARE_PRIORITY", "1"))
     
+    # Rate limiting configuration
+    # Conservative defaults for web scraping to avoid being blocked
+    DEFAULT_RATE_LIMIT = 30  # calls per minute
+    DEFAULT_MIN_INTERVAL = 2.0  # seconds between calls
+    
     def __init__(self, sleep_min: float = 2.0, sleep_max: float = 5.0):
         """
-        初始化 AkshareFetcher
+        Initialize AkshareFetcher with rate limiting.
         
         Args:
             sleep_min: 最小休眠时间（秒）
             sleep_max: 最大休眠时间（秒）
+        
+        Rate limit is configurable via environment variables:
+        - AKSHARE_RATE_LIMIT: calls per minute (default: 30)
+        - AKSHARE_MIN_INTERVAL: minimum seconds between calls (default: 2.0)
         """
         self.sleep_min = sleep_min
         self.sleep_max = sleep_max
         self._last_request_time: Optional[float] = None
+        
+        # Initialize rate limiter
+        rate_limit = int(os.getenv("AKSHARE_RATE_LIMIT", str(self.DEFAULT_RATE_LIMIT)))
+        min_interval = float(os.getenv("AKSHARE_MIN_INTERVAL", str(self.DEFAULT_MIN_INTERVAL)))
+        self._rate_limiter = RateLimiter(
+            calls_per_minute=rate_limit,
+            min_interval=min_interval,
+            name="AkshareFetcher"
+        )
+        logger.info(
+            f"[AkshareFetcher] Rate limiter initialized: "
+            f"{rate_limit} calls/min, min_interval={min_interval}s"
+        )
+        
         # 东财补丁开启才执行打补丁操作
         if get_config().enable_eastmoney_patch:
             eastmoney_patch()

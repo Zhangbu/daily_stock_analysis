@@ -15,6 +15,7 @@ PytdxFetcher - 通达信数据源 (Priority 2)
 """
 
 import logging
+import os
 import re
 from contextlib import contextmanager
 from typing import Optional, Generator, List, Tuple
@@ -28,8 +29,7 @@ from tenacity import (
     before_sleep_log,
 )
 
-from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS
-import os
+from .base import BaseFetcher, DataFetchError, RateLimiter, STANDARD_COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -95,16 +95,25 @@ class PytdxFetcher(BaseFetcher):
     - 自动选择最优服务器
     - 连接失败自动切换服务器
     - 失败后指数退避重试
+    - 统一的速率限制（120次/分钟）
     
     Pytdx 特点：
     - 免费、无需注册
     - 直连行情服务器
     - 支持实时行情和历史数据
     - 支持股票名称查询
+    
+    Rate Limiting:
+    - Default: 120 calls/min, min_interval=0.3s (direct server connection, relatively relaxed)
+    - Configurable via PYTDX_RATE_LIMIT and PYTDX_MIN_INTERVAL env vars
     """
     
     name = "PytdxFetcher"
     priority = int(os.getenv("PYTDX_PRIORITY", "2"))
+    
+    # Rate limiting configuration
+    DEFAULT_RATE_LIMIT = 120  # calls per minute (direct server, more relaxed)
+    DEFAULT_MIN_INTERVAL = 0.3  # seconds between calls
     
     # 默认通达信行情服务器列表
     DEFAULT_HOSTS = [
@@ -120,12 +129,16 @@ class PytdxFetcher(BaseFetcher):
     
     def __init__(self, hosts: Optional[List[Tuple[str, int]]] = None):
         """
-        初始化 PytdxFetcher
+        Initialize PytdxFetcher with rate limiting.
 
         Args:
             hosts: 服务器列表 [(host, port), ...]。若未传入，优先使用环境变量
                    PYTDX_SERVERS（ip:port,ip:port）或 PYTDX_HOST+PYTDX_PORT，
                    否则使用内置 DEFAULT_HOSTS。
+        
+        Rate limit is configurable via environment variables:
+        - PYTDX_RATE_LIMIT: calls per minute (default: 120)
+        - PYTDX_MIN_INTERVAL: minimum seconds between calls (default: 0.3)
         """
         if hosts is not None:
             self._hosts = hosts
@@ -137,6 +150,19 @@ class PytdxFetcher(BaseFetcher):
         self._current_host_idx = 0
         self._stock_list_cache = None  # 股票列表缓存
         self._stock_name_cache = {}    # 股票名称缓存 {code: name}
+        
+        # Initialize rate limiter
+        rate_limit = int(os.getenv("PYTDX_RATE_LIMIT", str(self.DEFAULT_RATE_LIMIT)))
+        min_interval = float(os.getenv("PYTDX_MIN_INTERVAL", str(self.DEFAULT_MIN_INTERVAL)))
+        self._rate_limiter = RateLimiter(
+            calls_per_minute=rate_limit,
+            min_interval=min_interval,
+            name="PytdxFetcher"
+        )
+        logger.info(
+            f"[PytdxFetcher] Rate limiter initialized: "
+            f"{rate_limit} calls/min, min_interval={min_interval}s"
+        )
     
     def _get_pytdx(self):
         """
@@ -244,13 +270,17 @@ class PytdxFetcher(BaseFetcher):
         
         流程：
         1. 检查是否为美股（不支持）
-        2. 使用上下文管理器管理连接
-        3. 判断市场代码
-        4. 调用 API 获取 K 线数据
+        2. 应用速率限制
+        3. 使用上下文管理器管理连接
+        4. 判断市场代码
+        5. 调用 API 获取 K 线数据
         """
         # 美股不支持，抛出异常让 DataFetcherManager 切换到其他数据源
         if _is_us_code(stock_code):
             raise DataFetchError(f"PytdxFetcher 不支持美股 {stock_code}，请使用 AkshareFetcher 或 YfinanceFetcher")
+        
+        # Apply rate limiting
+        self._rate_limiter.acquire()
         
         market, code = self._get_market_code(stock_code)
         

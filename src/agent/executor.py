@@ -8,15 +8,23 @@ Orchestrates the LLM + tools interaction loop:
 3. If tool_call → execute tool → feed result back
 4. If text → parse as final answer
 5. Loop until final answer or max_steps
+
+Optimizations:
+- TTL-based tool result caching
+- Tool execution retry with exponential backoff
+- Streaming progress callbacks
+- Structured tool call tracing
+- Async execution support
 """
 
+import asyncio
 import json
 import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from json_repair import repair_json
 
@@ -24,6 +32,20 @@ from src.agent.llm_adapter import LLMToolAdapter
 from src.agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# Tool execution retry configuration
+# ============================================================
+
+# Maximum retries for failed tool execution
+TOOL_MAX_RETRIES: int = 2
+
+# Base delay for exponential backoff (seconds)
+TOOL_RETRY_BASE_DELAY: float = 0.5
+
+# Maximum delay between retries (seconds)
+TOOL_RETRY_MAX_DELAY: float = 5.0
 
 
 # Tool name → short label used to build contextual thinking messages
@@ -49,6 +71,33 @@ _THINKING_TOOL_LABELS: Dict[str, str] = {
 # ============================================================
 
 @dataclass
+class ToolCallRecord:
+    """Detailed record of a single tool call execution."""
+    step: int
+    tool: str
+    arguments: Dict[str, Any]
+    success: bool
+    duration: float
+    result_length: int
+    cached: bool = False
+    retries: int = 0
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "step": self.step,
+            "tool": self.tool,
+            "arguments": self.arguments,
+            "success": self.success,
+            "duration": self.duration,
+            "result_length": self.result_length,
+            "cached": self.cached,
+            "retries": self.retries,
+            "error": self.error,
+        }
+
+
+@dataclass
 class AgentResult:
     """Result from an agent execution run."""
     success: bool = False
@@ -59,6 +108,25 @@ class AgentResult:
     total_tokens: int = 0
     provider: str = ""
     error: Optional[str] = None
+    # Enhanced metrics
+    total_tool_time: float = 0.0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    total_retries: int = 0
+
+    def get_performance_summary(self) -> str:
+        """Generate a human-readable performance summary."""
+        parts = [
+            f"Steps: {self.total_steps}",
+            f"Tokens: {self.total_tokens}",
+            f"Tool time: {self.total_tool_time:.2f}s",
+        ]
+        if self.cache_hits + self.cache_misses > 0:
+            hit_rate = self.cache_hits / (self.cache_hits + self.cache_misses) * 100
+            parts.append(f"Cache: {self.cache_hits}/{self.cache_hits + self.cache_misses} ({hit_rate:.0f}%)")
+        if self.total_retries > 0:
+            parts.append(f"Retries: {self.total_retries}")
+        return " | ".join(parts)
 
 
 # ============================================================
@@ -67,22 +135,25 @@ class AgentResult:
 
 AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的 A 股投资分析 Agent，拥有数据工具和交易策略，负责生成专业的【决策仪表盘】分析报告。
 
-## 工作流程（必须严格按阶段顺序执行，每阶段等工具结果返回后再进入下一阶段）
+## 工作流程（必须严格按阶段顺序执行）
 
-**第一阶段 · 行情与K线**（首先执行）
-- `get_realtime_quote` 获取实时行情
-- `get_daily_history` 获取历史K线
+**第一阶段 · 行情与K线** → `get_realtime_quote`, `get_daily_history`
+**第二阶段 · 技术与筹码** → `analyze_trend`, `get_chip_distribution`
+**第三阶段 · 情报搜索** → `search_stock_news`
+**第四阶段 · 生成报告** → 输出决策仪表盘 JSON
 
-**第二阶段 · 技术与筹码**（等第一阶段结果返回后执行）
-- `analyze_trend` 获取技术指标
-- `get_chip_distribution` 获取筹码分布
+> ⚠️ 禁止跨阶段合并调用。每阶段完成后才能进入下一阶段。
 
-**第三阶段 · 情报搜索**（等前两阶段完成后执行）
-- `search_stock_news` 搜索最新资讯、减持、业绩预告等风险信号
+## 早停机制：数据充分性判断
 
-**第四阶段 · 生成报告**（所有数据就绪后，输出完整决策仪表盘 JSON）
+当以下数据已获取时，应立即进入报告生成阶段，无需调用更多工具：
+- ✅ 实时行情（价格、涨跌幅、量比）
+- ✅ 历史K线（至少20日）
+- ✅ 技术指标（MA趋势）
+- ✅ 筹码分布（获利比例、集中度）
+- ✅ 最新新闻（风险排查）
 
-> ⚠️ 每阶段的工具调用必须完整返回结果后，才能进入下一阶段。禁止将不同阶段的工具合并到同一次调用中。
+达到以上5项即可直接生成报告，不必追求更多数据。
 
 ## 核心交易理念（必须严格遵守）
 
@@ -296,10 +367,24 @@ CHAT_SYSTEM_PROMPT = """你是一位专注于趋势交易的 A 股投资分析 A
 class AgentExecutor:
     """ReAct agent loop with tool calling.
 
+    Features:
+    - TTL-based tool result caching
+    - Tool execution retry with exponential backoff
+    - Streaming progress callbacks
+    - Structured tool call tracing
+    - Async execution support
+    - Smart context reuse hints
+
     Usage::
 
         executor = AgentExecutor(tool_registry, llm_adapter)
         result = executor.run("Analyze stock 600519")
+        
+        # With progress callback
+        result = executor.run("Analyze 600519", progress_callback=lambda e: print(e))
+        
+        # Async execution
+        result = await executor.run_async("Analyze 600519")
     """
 
     def __init__(
@@ -308,13 +393,144 @@ class AgentExecutor:
         llm_adapter: LLMToolAdapter,
         skill_instructions: str = "",
         max_steps: int = 10,
+        use_cache: bool = True,
+        max_retries: int = TOOL_MAX_RETRIES,
     ):
         self.tool_registry = tool_registry
         self.llm_adapter = llm_adapter
         self.skill_instructions = skill_instructions
         self.max_steps = max_steps
+        self.use_cache = use_cache
+        self.max_retries = max_retries
 
-    def run(self, task: str, context: Optional[Dict[str, Any]] = None) -> AgentResult:
+    # ============================================================
+    # Tool execution with retry and caching
+    # ============================================================
+
+    def _execute_tool_with_retry(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        use_cache: bool = True,
+    ) -> Tuple[Any, bool, int, Optional[str]]:
+        """Execute a tool with retry logic and optional caching.
+
+        Args:
+            tool_name: Name of the tool to execute.
+            arguments: Tool arguments.
+            use_cache: Whether to use caching.
+
+        Returns:
+            Tuple of (result, success, retry_count, error_message).
+        """
+        last_error: Optional[str] = None
+        retry_count = 0
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                if use_cache and self.use_cache:
+                    result, metadata = self.tool_registry.execute_with_cache(
+                        tool_name, use_cache=True, **arguments
+                    )
+                else:
+                    result = self.tool_registry.execute(tool_name, **arguments)
+                    metadata = {}
+                return result, True, retry_count, None
+            except Exception as e:
+                last_error = str(e)
+                retry_count = attempt
+                if attempt < self.max_retries:
+                    # Exponential backoff
+                    delay = min(TOOL_RETRY_BASE_DELAY * (2 ** attempt), TOOL_RETRY_MAX_DELAY)
+                    logger.warning(
+                        f"Tool '{tool_name}' failed (attempt {attempt + 1}/{self.max_retries + 1}): {e}. "
+                        f"Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+
+        return {"error": last_error}, False, retry_count, last_error
+
+    async def _execute_tool_with_retry_async(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        use_cache: bool = True,
+    ) -> Tuple[Any, bool, int, Optional[str]]:
+        """Execute a tool asynchronously with retry logic and caching."""
+        last_error: Optional[str] = None
+        retry_count = 0
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                if use_cache and self.use_cache:
+                    result, metadata = await self.tool_registry.execute_async_with_cache(
+                        tool_name, use_cache=True, **arguments
+                    )
+                else:
+                    result = await self.tool_registry.execute_async(tool_name, **arguments)
+                    metadata = {}
+                return result, True, retry_count, None
+            except Exception as e:
+                last_error = str(e)
+                retry_count = attempt
+                if attempt < self.max_retries:
+                    delay = min(TOOL_RETRY_BASE_DELAY * (2 ** attempt), TOOL_RETRY_MAX_DELAY)
+                    logger.warning(
+                        f"Tool '{tool_name}' failed async (attempt {attempt + 1}/{self.max_retries + 1}): {e}. "
+                        f"Retrying in {delay:.1f}s..."
+                    )
+                    await asyncio.sleep(delay)
+
+        return {"error": last_error}, False, retry_count, last_error
+
+    # ============================================================
+    # Enhanced user message builder with context reuse hints
+    # ============================================================
+
+    def _build_context_reuse_hint(self, context: Optional[Dict[str, Any]]) -> str:
+        """Build a hint string for pre-fetched context data.
+
+        This helps the LLM understand what data is already available
+        and avoid unnecessary tool calls.
+        """
+        if not context:
+            return ""
+
+        available_data = []
+        
+        if context.get("realtime_quote"):
+            available_data.append("实时行情（价格、涨跌幅、量比、换手率）")
+        if context.get("chip_distribution"):
+            available_data.append("筹码分布（获利比例、集中度、平均成本）")
+        if context.get("daily_history"):
+            available_data.append("历史K线数据")
+        if context.get("trend_analysis"):
+            available_data.append("技术指标分析（MA/MACD/RSI）")
+        if context.get("stock_info"):
+            available_data.append("股票基本信息")
+        if context.get("news"):
+            available_data.append("最新新闻资讯")
+
+        if not available_data:
+            return ""
+
+        hint = "\n\n⚠️ 【重要】以下数据已由系统预获取，请直接使用，无需再次调用对应工具：\n"
+        for i, data in enumerate(available_data, 1):
+            hint += f"  {i}. {data}\n"
+        hint += "\n请仅获取上述列表中未包含的数据。"
+
+        return hint
+
+    # ============================================================
+    # Synchronous execution
+    # ============================================================
+
+    def run(
+        self,
+        task: str,
+        context: Optional[Dict[str, Any]] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> AgentResult:
         """Execute the agent loop for a given task.
 
         Args:
@@ -685,3 +901,348 @@ class AgentExecutor:
 
         logger.warning("Failed to parse dashboard JSON from agent response")
         return None
+
+    # ============================================================
+    # Async execution methods
+    # ============================================================
+
+    async def run_async(
+        self,
+        task: str,
+        context: Optional[Dict[str, Any]] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> AgentResult:
+        """Execute the agent loop asynchronously.
+
+        Args:
+            task: The user task / analysis request.
+            context: Optional context dict (e.g., {"stock_code": "600519"}).
+            progress_callback: Optional callback for streaming progress events.
+
+        Returns:
+            AgentResult with parsed dashboard or error.
+        """
+        start_time = time.time()
+        tool_calls_log: List[Dict[str, Any]] = []
+        total_tokens = 0
+        total_tool_time = 0.0
+        cache_hits = 0
+        cache_misses = 0
+        total_retries = 0
+
+        # Build system prompt with skills
+        skills_section = ""
+        if self.skill_instructions:
+            skills_section = f"## 激活的交易策略\n\n{self.skill_instructions}"
+        system_prompt = AGENT_SYSTEM_PROMPT.format(skills_section=skills_section)
+
+        # Build tool declarations for all providers
+        tool_decls = {
+            "gemini": self.tool_registry.to_gemini_declarations(),
+            "openai": self.tool_registry.to_openai_tools(),
+            "anthropic": self.tool_registry.to_anthropic_tools(),
+        }
+
+        # Initialize conversation with context reuse hint
+        user_message = self._build_user_message(task, context)
+        context_hint = self._build_context_reuse_hint(context)
+        if context_hint:
+            user_message += context_hint
+
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+
+        return await self._run_loop_async(
+            messages, tool_decls, start_time, tool_calls_log, total_tokens,
+            total_tool_time, cache_hits, cache_misses, total_retries,
+            parse_dashboard=True, progress_callback=progress_callback
+        )
+
+    async def chat_async(
+        self,
+        message: str,
+        session_id: str,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> AgentResult:
+        """Execute the agent loop asynchronously for a free-form chat message.
+
+        Args:
+            message: The user's chat message.
+            session_id: The conversation session ID.
+            progress_callback: Optional callback for streaming progress events.
+            context: Optional context dict from previous analysis for data reuse.
+
+        Returns:
+            AgentResult with the text response.
+        """
+        from src.agent.conversation import conversation_manager
+
+        start_time = time.time()
+        tool_calls_log: List[Dict[str, Any]] = []
+        total_tokens = 0
+        total_tool_time = 0.0
+        cache_hits = 0
+        cache_misses = 0
+        total_retries = 0
+
+        # Build system prompt with skills
+        skills_section = ""
+        if self.skill_instructions:
+            skills_section = f"## 激活的交易策略\n\n{self.skill_instructions}"
+        system_prompt = CHAT_SYSTEM_PROMPT.format(skills_section=skills_section)
+
+        # Build tool declarations for all providers
+        tool_decls = {
+            "gemini": self.tool_registry.to_gemini_declarations(),
+            "openai": self.tool_registry.to_openai_tools(),
+            "anthropic": self.tool_registry.to_anthropic_tools(),
+        }
+
+        # Get conversation history
+        session = conversation_manager.get_or_create(session_id)
+        history = session.get_history()
+
+        # Initialize conversation
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+        ]
+        messages.extend(history)
+
+        # Inject previous analysis context if provided
+        if context:
+            context_parts = []
+            if context.get("stock_code"):
+                context_parts.append(f"股票代码: {context['stock_code']}")
+            if context.get("stock_name"):
+                context_parts.append(f"股票名称: {context['stock_name']}")
+            if context.get("previous_price"):
+                context_parts.append(f"上次分析价格: {context['previous_price']}")
+            if context.get("previous_change_pct"):
+                context_parts.append(f"上次涨跌幅: {context['previous_change_pct']}%")
+            if context.get("previous_analysis_summary"):
+                summary = context["previous_analysis_summary"]
+                summary_text = json.dumps(summary, ensure_ascii=False) if isinstance(summary, dict) else str(summary)
+                context_parts.append(f"上次分析摘要:\n{summary_text}")
+            if context_parts:
+                context_msg = "[系统提供的历史分析上下文，可供参考对比]\n" + "\n".join(context_parts)
+                messages.append({"role": "user", "content": context_msg})
+                messages.append({"role": "assistant", "content": "好的，我已了解该股票的历史分析数据。请告诉我你想了解什么？"})
+
+        # Add context reuse hint
+        user_message = message
+        context_hint = self._build_context_reuse_hint(context)
+        if context_hint:
+            user_message += context_hint
+
+        messages.append({"role": "user", "content": user_message})
+
+        # Persist the user turn
+        conversation_manager.add_message(session_id, "user", message)
+
+        result = await self._run_loop_async(
+            messages, tool_decls, start_time, tool_calls_log, total_tokens,
+            total_tool_time, cache_hits, cache_misses, total_retries,
+            parse_dashboard=False, progress_callback=progress_callback
+        )
+
+        # Persist assistant reply
+        if result.success:
+            conversation_manager.add_message(session_id, "assistant", result.content)
+        else:
+            error_note = f"[分析失败] {result.error or '未知错误'}"
+            conversation_manager.add_message(session_id, "assistant", error_note)
+
+        return result
+
+    async def _run_loop_async(
+        self,
+        messages: List[Dict[str, Any]],
+        tool_decls: Dict[str, Any],
+        start_time: float,
+        tool_calls_log: List[Dict[str, Any]],
+        total_tokens: int,
+        total_tool_time: float,
+        cache_hits: int,
+        cache_misses: int,
+        total_retries: int,
+        parse_dashboard: bool,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> AgentResult:
+        """Async implementation of the ReAct loop with caching and retry."""
+        provider_used = ""
+
+        for step in range(self.max_steps):
+            logger.info(f"Agent step {step + 1}/{self.max_steps} (async)")
+
+            if progress_callback:
+                if not tool_calls_log:
+                    thinking_msg = "正在制定分析路径..."
+                else:
+                    last_tool = tool_calls_log[-1].get("tool", "")
+                    label = _THINKING_TOOL_LABELS.get(last_tool, last_tool)
+                    thinking_msg = f"「{label}」已完成，继续深入分析..."
+                progress_callback({"type": "thinking", "step": step + 1, "message": thinking_msg})
+
+            response = self.llm_adapter.call_with_tools(messages, tool_decls)
+            provider_used = response.provider
+            total_tokens += response.usage.get("total_tokens", 0)
+
+            if response.tool_calls:
+                logger.info(f"Agent requesting {len(response.tool_calls)} tool call(s): "
+                          f"{[tc.name for tc in response.tool_calls]}")
+
+                # Add assistant message with tool calls to history
+                assistant_msg: Dict[str, Any] = {
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                            **({"thought_signature": tc.thought_signature} if tc.thought_signature is not None else {}),
+                        }
+                        for tc in response.tool_calls
+                    ],
+                }
+                if response.reasoning_content is not None:
+                    assistant_msg["reasoning_content"] = response.reasoning_content
+                messages.append(assistant_msg)
+
+                # Execute tool calls asynchronously with caching and retry
+                tool_results: List[Dict[str, Any]] = []
+
+                async def _exec_single_tool_async(tc_item):
+                    """Execute one tool async with retry and caching."""
+                    t0 = time.time()
+                    if progress_callback:
+                        progress_callback({"type": "tool_start", "step": step + 1, "tool": tc_item.name})
+
+                    result, success, retries, error = await self._execute_tool_with_retry_async(
+                        tc_item.name, tc_item.arguments, use_cache=self.use_cache
+                    )
+
+                    duration = time.time() - t0
+                    res_str = self._serialize_tool_result(result)
+
+                    if progress_callback:
+                        progress_callback({
+                            "type": "tool_done",
+                            "step": step + 1,
+                            "tool": tc_item.name,
+                            "success": success,
+                            "duration": round(duration, 2),
+                        })
+
+                    return tc_item, res_str, success, round(duration, 2), retries
+
+                # Execute all tools concurrently
+                tasks = [_exec_single_tool_async(tc) for tc in response.tool_calls]
+                results = await asyncio.gather(*tasks)
+
+                for tc_item, result_str, success, tool_duration, retries in results:
+                    total_retries += retries
+                    total_tool_time += tool_duration
+
+                    tool_calls_log.append({
+                        "step": step + 1,
+                        "tool": tc_item.name,
+                        "arguments": tc_item.arguments,
+                        "success": success,
+                        "duration": tool_duration,
+                        "result_length": len(result_str),
+                        "retries": retries,
+                    })
+                    tool_results.append({"tc": tc_item, "result_str": result_str})
+
+                # Append tool results to messages
+                tc_order = {tc.id: i for i, tc in enumerate(response.tool_calls)}
+                tool_results.sort(key=lambda x: tc_order.get(x["tc"].id, 0))
+                for tr in tool_results:
+                    messages.append({
+                        "role": "tool",
+                        "name": tr["tc"].name,
+                        "tool_call_id": tr["tc"].id,
+                        "content": tr["result_str"],
+                    })
+
+            else:
+                # LLM returned text — final answer
+                logger.info(f"Agent completed in {step + 1} steps "
+                          f"({time.time() - start_time:.1f}s, {total_tokens} tokens)")
+                if progress_callback:
+                    progress_callback({"type": "generating", "step": step + 1, "message": "正在生成最终分析..."})
+
+                final_content = response.content or ""
+
+                # Get cache stats
+                cache_stats = self.tool_registry.get_cache_stats()
+                cache_hits = cache_stats.get("cache_hits", 0)
+                cache_misses = cache_stats.get("cache_misses", 0)
+
+                if parse_dashboard:
+                    dashboard = self._parse_dashboard(final_content)
+                    return AgentResult(
+                        success=dashboard is not None,
+                        content=final_content,
+                        dashboard=dashboard,
+                        tool_calls_log=tool_calls_log,
+                        total_steps=step + 1,
+                        total_tokens=total_tokens,
+                        provider=provider_used,
+                        error=None if dashboard else "Failed to parse dashboard JSON from agent response",
+                        total_tool_time=total_tool_time,
+                        cache_hits=cache_hits,
+                        cache_misses=cache_misses,
+                        total_retries=total_retries,
+                    )
+                else:
+                    if response.provider == "error":
+                        return AgentResult(
+                            success=False,
+                            content="",
+                            dashboard=None,
+                            tool_calls_log=tool_calls_log,
+                            total_steps=step + 1,
+                            total_tokens=total_tokens,
+                            provider=provider_used,
+                            error=final_content,
+                            total_tool_time=total_tool_time,
+                            cache_hits=cache_hits,
+                            cache_misses=cache_misses,
+                            total_retries=total_retries,
+                        )
+                    return AgentResult(
+                        success=True,
+                        content=final_content,
+                        dashboard=None,
+                        tool_calls_log=tool_calls_log,
+                        total_steps=step + 1,
+                        total_tokens=total_tokens,
+                        provider=provider_used,
+                        error=None,
+                        total_tool_time=total_tool_time,
+                        cache_hits=cache_hits,
+                        cache_misses=cache_misses,
+                        total_retries=total_retries,
+                    )
+
+        # Max steps exceeded
+        logger.warning(f"Agent hit max steps ({self.max_steps})")
+        cache_stats = self.tool_registry.get_cache_stats()
+        return AgentResult(
+            success=False,
+            content="",
+            tool_calls_log=tool_calls_log,
+            total_steps=self.max_steps,
+            total_tokens=total_tokens,
+            provider=provider_used,
+            error=f"Agent exceeded max steps ({self.max_steps})",
+            total_tool_time=total_tool_time,
+            cache_hits=cache_stats.get("cache_hits", 0),
+            cache_misses=cache_stats.get("cache_misses", 0),
+            total_retries=total_retries,
+        )

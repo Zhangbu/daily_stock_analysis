@@ -7,6 +7,32 @@
 
 ## [Unreleased]
 
+### 优化（#minor）
+- ⚡ **Agent 模式全面性能优化**
+  - **工具结果 TTL 缓存**：`ToolRegistry` 新增 TTL 缓存机制，避免重复调用相同工具（如多次分析同一股票时重复获取行情）
+  - 工具缓存可配置：历史数据缓存 10 分钟，股票基本信息缓存 1 小时，实时行情不缓存
+  - **工具执行重试机制**：工具调用失败时自动重试（最多 2 次），指数退避延迟（0.5s → 1s → 2s）
+  - **智能上下文复用提示**：系统预获取的数据（实时行情、筹码分布等）在 user message 中显式声明，减少 LLM 不必要的工具调用
+  - **早停机制提示**：在系统提示词中明确数据充分性判断标准（5 项数据齐全即可生成报告），减少不必要的推理步数
+  - **Prompt Token 压缩**：优化系统提示词结构，精简工作流程描述，降低 token 消耗
+  - **流式输出完善**：增强 `progress_callback` 事件类型（`thinking`、`tool_start`、`tool_done`、`generating`），支持实时进度反馈
+  - **工具调用追踪增强**：`AgentResult` 新增 `total_tool_time`、`cache_hits`、`cache_misses`、`total_retries` 指标，支持 `get_performance_summary()` 性能摘要
+  - **异步执行支持**：新增 `run_async()`、`chat_async()`、`_run_loop_async()` 异步方法，支持高并发场景
+  - **异步工具执行**：`ToolRegistry` 新增 `execute_async()`、`execute_async_with_cache()` 异步执行方法
+
+### 新增（#minor）
+- ⏱️ **数据源统一频次限制**（Issue #xxx）
+  - 新增 `RateLimiter` 类，实现统一的速率限制机制，避免被数据源封禁
+  - 各数据源默认限制：
+    - `AkshareFetcher`: 30 次/分钟，最小间隔 2.0s（爬虫接口，保守限制）
+    - `TushareFetcher`: 已有 API 配额限制（无需额外限制）
+    - `EfinanceFetcher`: 已有 API 配额限制（无需额外限制）
+    - `BaostockFetcher`: 60 次/分钟，最小间隔 0.5s
+    - `PytdxFetcher`: 120 次/分钟，最小间隔 0.3s（直连服务器，限制较宽松）
+    - `YfinanceFetcher`: 60 次/分钟，最小间隔 1.0s（Yahoo Finance 有 API 限制）
+  - 支持环境变量配置：`<DATASOURCE>_RATE_LIMIT`（每分钟次数）和 `<DATASOURCE>_MIN_INTERVAL`（最小间隔秒数）
+  - 例如：`AKSHARE_RATE_LIMIT=20`、`YFINANCE_MIN_INTERVAL=2.0`
+
 ### 修复（#patch）
 - 🐛 **Web 服务启动自动构建前端静态资源**
   - `main.py` 在 `--serve/--serve-only`（含 `--webui/--webui-only`）模式启动前，自动执行 `apps/dsa-web` 下的 `npm install && npm run build`

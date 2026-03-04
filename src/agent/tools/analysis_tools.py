@@ -194,7 +194,11 @@ def _handle_get_volume_analysis(stock_code: str, days: int = 30) -> dict:
     import pandas as pd
 
     manager = DataFetcherManager()
-    df, source = manager.get_daily_data(stock_code, days=max(days + 20, 60))
+    # 使用配置的扩展时间范围
+    from src.config import get_config
+    config = get_config()
+    historical_days = config.historical_data_days
+    df, source = manager.get_daily_data(stock_code, days=historical_days)
 
     if df is None or df.empty:
         return {"error": f"No historical data for {stock_code}"}
@@ -311,7 +315,11 @@ def _handle_analyze_pattern(stock_code: str, days: int = 60) -> dict:
     import pandas as pd
 
     manager = DataFetcherManager()
-    df, source = manager.get_daily_data(stock_code, days=max(days, 120))
+    # 使用配置的扩展时间范围
+    from src.config import get_config
+    config = get_config()
+    historical_days = config.historical_data_days
+    df, source = manager.get_daily_data(stock_code, days=historical_days)
 
     if df is None or df.empty:
         return {"error": f"No historical data for {stock_code}"}

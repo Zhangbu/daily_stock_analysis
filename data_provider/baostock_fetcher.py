@@ -15,6 +15,7 @@ BaostockFetcher - 备用数据源 2 (Priority 3)
 """
 
 import logging
+import os
 import re
 from contextlib import contextmanager
 from datetime import datetime
@@ -29,8 +30,7 @@ from tenacity import (
     before_sleep_log,
 )
 
-from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS
-import os
+from .base import BaseFetcher, DataFetchError, RateLimiter, STANDARD_COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -58,19 +58,47 @@ class BaostockFetcher(BaseFetcher):
     - 使用上下文管理器管理连接生命周期
     - 每次请求都重新登录/登出，防止连接泄露
     - 失败后指数退避重试
+    - 统一的速率限制（60次/分钟）
     
     Baostock 特点：
     - 免费、无需注册
     - 需要显式登录/登出
     - 数据更新略有延迟（T+1）
+    
+    Rate Limiting:
+    - Default: 60 calls/min, min_interval=0.5s
+    - Configurable via BAOSTOCK_RATE_LIMIT and BAOSTOCK_MIN_INTERVAL env vars
     """
     
     name = "BaostockFetcher"
     priority = int(os.getenv("BAOSTOCK_PRIORITY", "3"))
     
+    # Rate limiting configuration
+    DEFAULT_RATE_LIMIT = 60  # calls per minute
+    DEFAULT_MIN_INTERVAL = 0.5  # seconds between calls
+    
     def __init__(self):
-        """初始化 BaostockFetcher"""
+        """
+        Initialize BaostockFetcher with rate limiting.
+        
+        Rate limit is configurable via environment variables:
+        - BAOSTOCK_RATE_LIMIT: calls per minute (default: 60)
+        - BAOSTOCK_MIN_INTERVAL: minimum seconds between calls (default: 0.5)
+        """
         self._bs_module = None
+        
+        # Initialize rate limiter
+        rate_limit = int(os.getenv("BAOSTOCK_RATE_LIMIT", str(self.DEFAULT_RATE_LIMIT)))
+        min_interval = float(os.getenv("BAOSTOCK_MIN_INTERVAL", str(self.DEFAULT_MIN_INTERVAL)))
+        self._rate_limiter = RateLimiter(
+            calls_per_minute=rate_limit,
+            min_interval=min_interval,
+            name="BaostockFetcher"
+        )
+        logger.info(
+            f"[BaostockFetcher] Rate limiter initialized: "
+            f"{rate_limit} calls/min, min_interval={min_interval}s"
+        )
     
     def _get_baostock(self):
         """
@@ -175,14 +203,18 @@ class BaostockFetcher(BaseFetcher):
         
         流程：
         1. 检查是否为美股（不支持）
-        2. 使用上下文管理器管理连接
-        3. 转换股票代码格式
-        4. 调用 API 查询数据
-        5. 将结果转换为 DataFrame
+        2. 应用速率限制
+        3. 使用上下文管理器管理连接
+        4. 转换股票代码格式
+        5. 调用 API 查询数据
+        6. 将结果转换为 DataFrame
         """
         # 美股不支持，抛出异常让 DataFetcherManager 切换到其他数据源
         if _is_us_code(stock_code):
             raise DataFetchError(f"BaostockFetcher 不支持美股 {stock_code}，请使用 AkshareFetcher 或 YfinanceFetcher")
+        
+        # Apply rate limiting
+        self._rate_limiter.acquire()
         
         # 转换代码格式
         bs_code = self._convert_stock_code(stock_code)
