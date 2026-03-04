@@ -52,6 +52,7 @@ from src.core.market_review import run_market_review
 
 from src.config import get_config, Config
 from src.logging_config import setup_logging
+from src.hot_stocks_analyzer import get_hot_stocks_analyzer
 
 
 logger = logging.getLogger(__name__)
@@ -273,6 +274,42 @@ def run_full_analysis(
         if stock_codes is None:
             stock_codes = config.stock_list
         
+        # === Step 0: Get LHB stocks and merge with STOCK_LIST ===
+        lhb_codes = []
+        lhb_records_map = {}  # For context enhancement
+        if getattr(config, 'lhb_stocks_analysis_enabled', False):
+            try:
+                hot_analyzer = get_hot_stocks_analyzer()
+                lhb_days = getattr(config, 'lhb_days', 1)
+                lhb_max_count = getattr(config, 'lhb_analysis_max_count', 10)
+                lhb_min_net_buy = getattr(config, 'lhb_min_net_buy', 0)
+                
+                logger.info(f"获取龙虎榜股票用于个股分析（最近 {lhb_days} 天，最大 {lhb_max_count} 只）...")
+                lhb_codes = hot_analyzer.get_lhb_stock_codes(
+                    days=lhb_days,
+                    max_count=lhb_max_count,
+                    min_net_buy=lhb_min_net_buy,
+                    sort_by="net_buy"
+                )
+                
+                # Get LHB records for context enhancement
+                lhb_records = hot_analyzer.get_lhb_records_for_analysis(days=lhb_days)
+                lhb_records_map = {r.code.upper(): r for r in lhb_records}
+                
+                if lhb_codes:
+                    logger.info(f"龙虎榜股票: {lhb_codes}")
+            except Exception as e:
+                logger.warning(f"获取龙虎榜股票失败: {e}")
+        
+        # Merge LHB stocks with STOCK_LIST (deduplicate)
+        original_codes = stock_codes
+        if lhb_codes:
+            original_set = set(code.upper() for code in stock_codes)
+            new_lhb_codes = [code for code in lhb_codes if code.upper() not in original_set]
+            if new_lhb_codes:
+                stock_codes = stock_codes + new_lhb_codes
+                logger.info(f"合并龙虎榜股票后的分析列表: {stock_codes} (原自选股: {len(original_codes)}, 新增龙虎榜: {len(new_lhb_codes)})")
+        
         # Issue #373: Trading day filter (per-stock, per-market)
         effective_codes = stock_codes
         filtered_codes, effective_region, should_skip = _compute_trading_day_filter(
@@ -313,13 +350,20 @@ def run_full_analysis(
             save_context_snapshot=save_context_snapshot
         )
 
-        # 1. 运行个股分析
+        # 1. 运行个股分析（包含自选股 + 龙虎榜股票）
+        logger.info(f"开始个股分析，共 {len(stock_codes)} 只股票...")
         results = pipeline.run(
             stock_codes=stock_codes,
             dry_run=args.dry_run,
             send_notification=not args.no_notify,
             merge_notification=merge_notification
         )
+        
+        # Log analysis results summary
+        if results:
+            lhb_results = [r for r in results if r.code.upper() in set(lhb_codes)]
+            stock_results = [r for r in results if r.code.upper() not in set(lhb_codes)]
+            logger.info(f"个股分析完成: 自选股 {len(stock_results)} 只, 龙虎榜 {len(lhb_results)} 只")
 
         # Issue #128: 分析间隔 - 在个股分析和大盘分析之间添加延迟
         analysis_delay = getattr(config, 'analysis_delay', 0)
@@ -339,6 +383,7 @@ def run_full_analysis(
             and not args.no_market_review
             and effective_region != ''
         ):
+            logger.info("开始执行大盘复盘分析...")
             review_result = run_market_review(
                 notifier=pipeline.notifier,
                 analyzer=pipeline.analyzer,
@@ -350,6 +395,36 @@ def run_full_analysis(
             # 如果有结果，赋值给 market_report 用于后续飞书文档生成
             if review_result:
                 market_report = review_result
+                logger.info(f"大盘复盘分析完成，报告长度: {len(market_report)} 字符")
+            else:
+                logger.warning("大盘复盘分析未返回结果")
+        else:
+            if not config.market_review_enabled:
+                logger.info("大盘复盘已禁用 (MARKET_REVIEW_ENABLED=false)")
+            elif args.no_market_review:
+                logger.info("跳过大盘复盘 (--no-market-review)")
+
+        # 3. 获取热门股涨幅榜数据（龙虎榜股票已在个股分析中处理）
+        hot_stocks_report = ""
+        try:
+            hot_analyzer = get_hot_stocks_analyzer()
+            hot_stocks_count = getattr(config, 'hot_stocks_count', 20)
+
+            # Generate hot stocks section
+            logger.info(f"获取热门股涨幅榜前 {hot_stocks_count} 只...")
+            hot_stocks_lines = hot_analyzer.generate_hot_stocks_section(n=hot_stocks_count)
+            if hot_stocks_lines:
+                hot_stocks_report = "\n".join(hot_stocks_lines)
+                logger.info(f"热门股数据获取完成")
+
+        except Exception as e:
+            logger.warning(f"获取热门股数据失败: {e}")
+
+        # 推送热门股涨幅榜（龙虎榜已在个股分析中处理，不再单独推送原始数据）
+        if hot_stocks_report and not args.no_notify:
+            if pipeline.notifier.is_available():
+                if pipeline.notifier.send(hot_stocks_report):
+                    logger.info("已推送热门股涨幅榜数据")
 
         # Issue #190: 合并推送（个股+大盘复盘）
         if merge_notification and (results or market_report) and not args.no_notify:

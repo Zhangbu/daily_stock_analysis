@@ -199,6 +199,9 @@ class Config:
     # === 热门股与龙虎榜配置 ===
     hot_stocks_count: int = 20  # 热门股数量（涨幅榜前N只）
     lhb_days: int = 1  # 龙虎榜天数（最近N天）
+    lhb_stocks_analysis_enabled: bool = False  # 是否将龙虎榜股票纳入个股分析
+    lhb_analysis_max_count: int = 10  # 龙虎榜股票分析数量上限
+    lhb_min_net_buy: float = 0  # 龙虎榜股票最小净买入额（万元）
     
     # === 时间范围配置 ===
     historical_data_days: int = 30  # 历史数据天数（默认30天）
@@ -520,6 +523,12 @@ class Config:
             telegram_webhook_secret=os.getenv('TELEGRAM_WEBHOOK_SECRET'),
             # Discord 机器人扩展配置
             discord_bot_status=os.getenv('DISCORD_BOT_STATUS', 'A股智能分析 | /help'),
+            # 热门股与龙虎榜配置
+            hot_stocks_count=int(os.getenv('HOT_STOCKS_COUNT', '20')),
+            lhb_days=int(os.getenv('LHB_DAYS', '1')),
+            lhb_stocks_analysis_enabled=os.getenv('LHB_STOCKS_ANALYSIS_ENABLED', 'false').lower() == 'true',
+            lhb_analysis_max_count=int(os.getenv('LHB_ANALYSIS_MAX_COUNT', '10')),
+            lhb_min_net_buy=float(os.getenv('LHB_MIN_NET_BUY', '0')),
             # 时间范围配置
             historical_data_days=int(os.getenv('HISTORICAL_DATA_DAYS', '30')),
             trend_analysis_window=int(os.getenv('TREND_ANALYSIS_WINDOW', '60')),

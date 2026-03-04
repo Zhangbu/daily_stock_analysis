@@ -12,10 +12,25 @@
 
 import logging
 import sys
+import warnings
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import List, Optional
+
+# ============================================================
+# Third-party warning suppression
+# ============================================================
+
+# Suppress pkg_resources deprecation warning from py_mini_racer (akshare dependency)
+# This warning is raised by setuptools >= 67 and will be removed in setuptools >= 81
+# py_mini_racer 0.6.0 has not yet fixed this issue
+# See: https://github.com/sqreen/PyMiniRacer/issues/173
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message="pkg_resources is deprecated as an API"
+)
 
 # ============================================================
 # 日志格式常量

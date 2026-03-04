@@ -52,6 +52,8 @@ class HotStocksAnalyzer:
     
     def __init__(self):
         self._akshare = None
+        self._lhb_cache = None  # Cache for LHB records
+        self._lhb_cache_time = None  # Cache timestamp
     
     def _get_akshare(self):
         """Lazy import akshare"""
@@ -86,7 +88,7 @@ class HotStocksAnalyzer:
             
             # 按涨跌幅排序
             df = df.sort_values(by='涨跌幅', ascending=False)
-            
+
             # 取前N只
             df = df.head(n)
             
@@ -144,6 +146,11 @@ class HotStocksAnalyzer:
                     
                     for _, row in df.iterrows():
                         try:
+                            # akshare column names changed: 净买额 -> 龙虎榜净买额
+                            net_buy_val = row.get('龙虎榜净买额') or row.get('净买额')
+                            buy_amount_val = row.get('龙虎榜买入额') or row.get('买入额')
+                            sell_amount_val = row.get('龙虎榜卖出额') or row.get('卖出额')
+                            
                             record = LHBRecord(
                                 code=str(row.get('代码', '')),
                                 name=str(row.get('名称', '')),
@@ -151,9 +158,9 @@ class HotStocksAnalyzer:
                                 change_pct=float(row.get('涨跌幅', 0)) if row.get('涨跌幅') else 0,
                                 turnover_rate=float(row.get('换手率', 0)) if row.get('换手率') else None,
                                 reason=str(row.get('上榜原因', '')) if row.get('上榜原因') else None,
-                                net_buy=float(row.get('净买额', 0)) / 10000 if row.get('净买额') else None,
-                                buy_amount=float(row.get('买入额', 0)) / 10000 if row.get('买入额') else None,
-                                sell_amount=float(row.get('卖出额', 0)) / 10000 if row.get('卖出额') else None,
+                                net_buy=float(net_buy_val) / 10000 if net_buy_val else None,
+                                buy_amount=float(buy_amount_val) / 10000 if buy_amount_val else None,
+                                sell_amount=float(sell_amount_val) / 10000 if sell_amount_val else None,
                             )
                             records.append(record)
                         except Exception as e:
@@ -225,6 +232,60 @@ class HotStocksAnalyzer:
         ])
         
         return lines
+    
+    def get_lhb_stock_codes(
+        self, 
+        days: int = 1, 
+        max_count: int = 10,
+        min_net_buy: float = 0,
+        sort_by: str = "net_buy"
+    ) -> List[str]:
+        """
+        Get stock codes from dragon-tiger list for analysis
+        
+        Args:
+            days: Number of recent days to fetch
+            max_count: Maximum number of stocks to return
+            min_net_buy: Minimum net buy amount (万元), filter out stocks below this
+            sort_by: Sort field - "net_buy" or "change_pct"
+            
+        Returns:
+            List of stock codes (uppercase, for analysis pipeline)
+        """
+        records = self.get_dragon_tiger_list(days)
+        
+        if not records:
+            logger.info("No LHB records found")
+            return []
+        
+        # Filter by min_net_buy
+        if min_net_buy > 0:
+            records = [r for r in records if r.net_buy and r.net_buy >= min_net_buy]
+            logger.info(f"Filtered {len(records)} LHB records with net_buy >= {min_net_buy}万")
+        
+        # Sort
+        if sort_by == "net_buy":
+            records = sorted(records, key=lambda x: x.net_buy or 0, reverse=True)
+        elif sort_by == "change_pct":
+            records = sorted(records, key=lambda x: abs(x.change_pct) if x.change_pct else 0, reverse=True)
+        
+        # Get codes (uppercase for consistency)
+        codes = [r.code.upper() for r in records[:max_count]]
+        
+        logger.info(f"Selected {len(codes)} LHB stocks for analysis: {codes}")
+        return codes
+    
+    def get_lhb_records_for_analysis(self, days: int = 1) -> List[LHBRecord]:
+        """
+        Get LHB records with all details for context enhancement
+        
+        Args:
+            days: Number of recent days to fetch
+            
+        Returns:
+            List of LHBRecord objects (deduplicated by code)
+        """
+        return self.get_dragon_tiger_list(days)
     
     def generate_lhb_section(self, days: int = 1) -> List[str]:
         """
