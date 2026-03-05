@@ -5,11 +5,38 @@ Hot Stocks and Dragon-Tiger List Analyzer
 Provides real-time hot stocks (top gainers) and dragon-tiger list (lhb) data.
 """
 import logging
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _disable_proxy():
+    """
+    Context manager to temporarily disable proxy settings.
+    
+    Chinese data sources (EastMoney, Sina) don't need proxy.
+    This ensures requests work even if system proxy is misconfigured.
+    """
+    # Save original proxy settings
+    original_values = {}
+    proxy_keys = ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY']
+    
+    for key in proxy_keys:
+        if key in os.environ:
+            original_values[key] = os.environ[key]
+            del os.environ[key]
+    
+    try:
+        yield
+    finally:
+        # Restore original proxy settings
+        for key, value in original_values.items():
+            os.environ[key] = value
 
 
 @dataclass
@@ -70,20 +97,89 @@ class HotStocksAnalyzer:
         """
         Get top gainers (涨幅榜前N只股票)
         
+        Data source priority:
+        1. Sina (ak.stock_zh_a_spot) - more stable, no rate limiting
+        2. EastMoney (ak.stock_zh_a_spot_em) - richer data, but prone to blocking
+        
         Args:
             n: Number of stocks to return
             
         Returns:
             List of HotStock objects
         """
+        ak = self._get_akshare()
+        
+        # Try Sina first (more stable)
+        stocks = self._get_hot_stocks_sina(ak, n)
+        if stocks:
+            return stocks
+        
+        # Fallback to EastMoney
+        logger.warning("Sina data source failed, trying EastMoney...")
+        return self._get_hot_stocks_em(ak, n)
+    
+    def _get_hot_stocks_sina(self, ak, n: int) -> List[HotStock]:
+        """
+        Get hot stocks from Sina (ak.stock_zh_a_spot)
+        
+        Pros: Stable, no rate limiting
+        Cons: No turnover_rate field
+        """
         try:
-            ak = self._get_akshare()
-            
-            # 获取实时涨幅榜
-            df = ak.stock_zh_a_spot_em()
+            logger.info("[API调用] ak.stock_zh_a_spot() 获取A股实时行情(新浪)...")
+            with _disable_proxy():
+                df = ak.stock_zh_a_spot()
             
             if df is None or df.empty:
-                logger.warning("No data returned from akshare")
+                logger.warning("[新浪] No data returned")
+                return []
+            
+            logger.info(f"[新浪] Got {len(df)} stocks")
+            
+            # 按涨跌幅排序
+            df = df.sort_values(by='涨跌幅', ascending=False)
+            
+            # 取前N只
+            df = df.head(n)
+            
+            stocks = []
+            for _, row in df.iterrows():
+                try:
+                    stock = HotStock(
+                        code=str(row.get('代码', '')),
+                        name=str(row.get('名称', '')),
+                        change_pct=float(row.get('涨跌幅', 0)) if row.get('涨跌幅') else 0,
+                        price=float(row.get('最新价', 0)) if row.get('最新价') else 0,
+                        volume=float(row.get('成交量', 0)) / 100000 if row.get('成交量') else None,  # 转万手
+                        amount=float(row.get('成交额', 0)) / 10000 if row.get('成交额') else None,  # 转万元
+                        turnover_rate=None,  # Sina does not provide turnover rate
+                    )
+                    stocks.append(stock)
+                except Exception as e:
+                    logger.debug(f"Error parsing stock row: {e}")
+                    continue
+            
+            logger.info(f"[新浪] Got {len(stocks)} hot stocks")
+            return stocks
+            
+        except Exception as e:
+            logger.error(f"[新浪] Failed to get hot stocks: {e}")
+            return []
+    
+    def _get_hot_stocks_em(self, ak, n: int) -> List[HotStock]:
+        """
+        Get hot stocks from EastMoney (ak.stock_zh_a_spot_em)
+        
+        Pros: Has turnover_rate field
+        Cons: Prone to rate limiting and blocking
+        """
+        try:
+            logger.info("[API调用] ak.stock_zh_a_spot_em() 获取A股实时行情(东财)...")
+            with _disable_proxy():
+                df = ak.stock_zh_a_spot_em()
+            
+            if df is None or df.empty:
+                logger.warning("[东财] No data returned from akshare")
                 return []
             
             # 按涨跌幅排序
@@ -98,8 +194,8 @@ class HotStocksAnalyzer:
                     stock = HotStock(
                         code=str(row.get('代码', '')),
                         name=str(row.get('名称', '')),
-                        change_pct=float(row.get('涨跌幅', 0)),
-                        price=float(row.get('最新价', 0)),
+                        change_pct=float(row.get('涨跌幅', 0)) if row.get('涨跌幅') else 0,
+                        price=float(row.get('最新价', 0)) if row.get('最新价') else 0,
                         volume=float(row.get('成交量', 0)) / 100000 if row.get('成交量') else None,  # 转万手
                         amount=float(row.get('成交额', 0)) / 10000 if row.get('成交额') else None,  # 转万元
                         turnover_rate=float(row.get('换手率', 0)) if row.get('换手率') else None,
@@ -109,11 +205,11 @@ class HotStocksAnalyzer:
                     logger.debug(f"Error parsing stock row: {e}")
                     continue
             
-            logger.info(f"Got {len(stocks)} hot stocks")
+            logger.info(f"[东财] Got {len(stocks)} hot stocks")
             return stocks
             
         except Exception as e:
-            logger.error(f"Failed to get hot stocks: {e}")
+            logger.error(f"[东财] Failed to get hot stocks: {e}")
             return []
     
     def get_dragon_tiger_list(self, days: int = 1) -> List[LHBRecord]:
