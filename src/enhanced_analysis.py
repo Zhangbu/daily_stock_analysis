@@ -6,6 +6,9 @@ Integrates advanced analysis modules into stock analysis workflow:
 - LHB Seat Analysis (龙虎榜席位分析)
 - Relative Strength (个股vs板块相对强度)
 - Market Sentiment (市场温度计)
+- Money Effect (赚钱效应监测)
+- Sector Rotation (主线轮动图谱)
+- Realtime Alert (异动实时推送)
 
 Provides unified API for use in stock analyzer and agent tools.
 """
@@ -17,6 +20,9 @@ from datetime import datetime
 from .lhb_seat_analyzer import get_lhb_seat_analyzer, LHBSeatAnalysis
 from .relative_strength import get_relative_strength_analyzer, RelativeStrengthResult
 from .market_sentiment import get_market_sentiment_analyzer, MarketSentimentResult
+from .money_effect import get_money_effect_analyzer, MoneyEffectResult
+from .sector_rotation import get_sector_rotation_analyzer, SectorRotationResult
+from .realtime_alert import get_realtime_alert_scanner, AlertScanResult
 
 logger = logging.getLogger(__name__)
 
