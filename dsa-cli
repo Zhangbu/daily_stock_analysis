@@ -1,0 +1,602 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+===================================
+DSA-CLI — Daily Stock Analysis CLI for OpenClaw Integration
+===================================
+
+A command-line interface for stock analysis, optimized for OpenClaw integration.
+Designed for local execution on the same machine as OpenClaw.
+
+Usage:
+    dsa-cli analyze <stock_code>        # Full AI analysis
+    dsa-cli quote <stock_code>          # Real-time quote
+    dsa-cli trend <stock_code>          # Technical trend analysis
+    dsa-cli news <stock_code>           # Search stock news
+    dsa-cli batch <codes>               # Batch analysis (comma-separated)
+    dsa-cli ma <stock_code>             # Moving average analysis
+    dsa-cli pattern <stock_code>        # K-line pattern recognition
+    dsa-cli volume <stock_code>         # Volume-price analysis
+    dsa-cli levels <stock_code>         # Support/resistance levels
+
+Options:
+    --json          Output as JSON (for OpenClaw parsing)
+    --brief         Brief output (reduced token consumption)
+    --days N        Historical days for analysis (default: 60)
+    --help          Show help message
+"""
+
+import argparse
+import json
+import logging
+import sys
+import os
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+# Setup environment before importing src modules
+def setup_env():
+    """Setup environment variables and Python path."""
+    # Add project root to Python path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+    
+    # Load .env if exists
+    env_file = os.path.join(script_dir, ".env")
+    if os.path.exists(env_file):
+        from dotenv import load_dotenv
+        load_dotenv(env_file)
+
+setup_env()
+
+# Now import project modules
+from data_provider.base import canonical_stock_code
+from src.logging_config import setup_logging
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# Output Formatters
+# ============================================================
+
+def format_json(data: Dict[str, Any]) -> str:
+    """Format output as JSON."""
+    return json.dumps(data, ensure_ascii=False, indent=2, default=str)
+
+
+def format_brief(data: Dict[str, Any], command: str) -> str:
+    """Format brief output for reduced token consumption."""
+    if "error" in data:
+        return f"Error: {data['error']}"
+    
+    lines = []
+    
+    if command == "quote":
+        lines.append(f"{data.get('name', data.get('code', 'N/A'))} ({data.get('code', 'N/A')})")
+        lines.append(f"Price: {data.get('price', 'N/A')} | Change: {data.get('change_pct', 'N/A')}%")
+        lines.append(f"Volume: {data.get('volume', 'N/A')} | Turnover: {data.get('turnover_rate', 'N/A')}%")
+    
+    elif command == "trend":
+        lines.append(f"{data.get('code', 'N/A')} Trend: {data.get('trend_status', 'N/A')}")
+        lines.append(f"MA Alignment: {data.get('ma_alignment', 'N/A')}")
+        lines.append(f"Signal: {data.get('buy_signal', 'N/A')} (Score: {data.get('signal_score', 'N/A')})")
+        lines.append(f"MACD: {data.get('macd_signal', 'N/A')} | RSI: {data.get('rsi_status', 'N/A')}")
+    
+    elif command == "ma":
+        lines.append(f"{data.get('code', 'N/A')} @ {data.get('current_price', 'N/A')}")
+        lines.append(f"Alignment: {data.get('ma_alignment', 'N/A')}")
+        ma_data = data.get("ma", {})
+        for key in ["ma5", "ma10", "ma20", "ma60"]:
+            if key in ma_data and ma_data[key]:
+                v = ma_data[key]
+                lines.append(f"  {key.upper()}: {v.get('value', 'N/A')} (bias: {v.get('bias_pct', 'N/A')}%)")
+    
+    elif command == "news":
+        news_list = data.get("news", [])
+        lines.append(f"Found {len(news_list)} news for {data.get('code', 'N/A')}")
+        for i, item in enumerate(news_list[:5], 1):
+            lines.append(f"{i}. {item.get('title', 'N/A')}")
+            lines.append(f"   {item.get('source', 'N/A')} - {item.get('published_date', 'N/A')}")
+    
+    elif command == "pattern":
+        patterns = data.get("patterns", [])
+        lines.append(f"{data.get('code', 'N/A')} @ {data.get('current_price', 'N/A')}")
+        if patterns:
+            lines.append(f"Patterns ({len(patterns)}):")
+            for p in patterns[:5]:
+                lines.append(f"  - {p.get('pattern', 'N/A')}: {p.get('desc', 'N/A')}")
+        else:
+            lines.append("No significant patterns detected")
+    
+    elif command == "volume":
+        lines.append(f"{data.get('code', 'N/A')} Volume Analysis")
+        lines.append(f"Vol Ratio 5d: {data.get('volume_ratio_vs_5d', 'N/A')}x")
+        lines.append(f"Trend: {data.get('volume_trend', 'N/A')}")
+        lines.append(f"Pattern: {data.get('pattern', 'N/A')}")
+    
+    elif command == "levels":
+        levels = data.get("levels", [])
+        lines.append(f"{data.get('code', 'N/A')} Key Levels")
+        for lv in levels[:6]:
+            lines.append(f"  {lv.get('price', 'N/A')}: {lv.get('type', 'N/A')} ({lv.get('strength', 'N/A')})")
+    
+    elif command == "analyze":
+        # Full analysis brief output
+        report = data.get("report", {})
+        summary = report.get("summary", {})
+        strategy = report.get("strategy", {})
+        
+        lines.append(f"=== {data.get('stock_name', data.get('stock_code', 'N/A'))} ({data.get('stock_code', 'N/A')}) ===")
+        lines.append(f"Score: {summary.get('sentiment_score', 'N/A')} | Advice: {summary.get('operation_advice', 'N/A')}")
+        lines.append(f"Trend: {summary.get('trend_prediction', 'N/A')}")
+        if strategy:
+            lines.append(f"Buy: {strategy.get('ideal_buy', 'N/A')} | Stop: {strategy.get('stop_loss', 'N/A')}")
+        lines.append(f"Summary: {summary.get('analysis_summary', 'N/A')[:200]}...")
+    
+    else:
+        # Generic fallback
+        lines.append(json.dumps(data, ensure_ascii=False, default=str)[:500])
+    
+    return "\n".join(lines)
+
+
+def format_human(data: Dict[str, Any], command: str) -> str:
+    """Format human-readable output with more details."""
+    if "error" in data:
+        return f"❌ Error: {data['error']}"
+    
+    lines = []
+    lines.append("=" * 50)
+    
+    if command == "quote":
+        lines.append(f"📊 {data.get('name', 'N/A')} ({data.get('code', 'N/A')})")
+        lines.append("=" * 50)
+        lines.append(f"  Current Price:  {data.get('price', 'N/A')}")
+        lines.append(f"  Change:         {data.get('change_pct', 'N/A')}%")
+        lines.append(f"  Open:           {data.get('open', 'N/A')}")
+        lines.append(f"  High:           {data.get('high', 'N/A')}")
+        lines.append(f"  Low:            {data.get('low', 'N/A')}")
+        lines.append(f"  Volume:         {data.get('volume', 'N/A')}")
+        lines.append(f"  Turnover Rate:  {data.get('turnover_rate', 'N/A')}%")
+    
+    elif command == "trend":
+        lines.append(f"📈 Technical Trend Analysis: {data.get('code', 'N/A')}")
+        lines.append("=" * 50)
+        lines.append(f"  Trend Status:   {data.get('trend_status', 'N/A')}")
+        lines.append(f"  MA Alignment:   {data.get('ma_alignment', 'N/A')}")
+        lines.append(f"  Trend Strength: {data.get('trend_strength', 'N/A')}")
+        lines.append("")
+        lines.append("  Moving Averages:")
+        lines.append(f"    MA5:  {data.get('ma5', 'N/A')} (Bias: {data.get('bias_ma5', 'N/A')}%)")
+        lines.append(f"    MA10: {data.get('ma10', 'N/A')} (Bias: {data.get('bias_ma10', 'N/A')}%)")
+        lines.append(f"    MA20: {data.get('ma20', 'N/A')} (Bias: {data.get('bias_ma20', 'N/A')}%)")
+        lines.append("")
+        lines.append("  MACD:")
+        lines.append(f"    DIF: {data.get('macd_dif', 'N/A')} | DEA: {data.get('macd_dea', 'N/A')}")
+        lines.append(f"    Status: {data.get('macd_status', 'N/A')} - {data.get('macd_signal', 'N/A')}")
+        lines.append("")
+        lines.append("  RSI:")
+        lines.append(f"    RSI6: {data.get('rsi_6', 'N/A')} | RSI12: {data.get('rsi_12', 'N/A')}")
+        lines.append(f"    Status: {data.get('rsi_status', 'N/A')} - {data.get('rsi_signal', 'N/A')}")
+        lines.append("")
+        lines.append(f"  🎯 Signal: {data.get('buy_signal', 'N/A')} (Score: {data.get('signal_score', 'N/A')})")
+        if data.get("signal_reasons"):
+            lines.append("  Reasons:")
+            for reason in data.get("signal_reasons", []):
+                lines.append(f"    • {reason}")
+    
+    elif command == "analyze":
+        report = data.get("report", {})
+        meta = report.get("meta", {})
+        summary = report.get("summary", {})
+        strategy = report.get("strategy", {})
+        
+        lines.append(f"🔍 AI Analysis Report")
+        lines.append("=" * 50)
+        lines.append(f"  Stock: {meta.get('stock_name', 'N/A')} ({meta.get('stock_code', 'N/A')})")
+        lines.append(f"  Price: {meta.get('current_price', 'N/A')} | Change: {meta.get('change_pct', 'N/A')}%")
+        lines.append("")
+        lines.append("  📊 Summary:")
+        lines.append(f"    Score:    {summary.get('sentiment_score', 'N/A')}")
+        lines.append(f"    Advice:   {summary.get('operation_advice', 'N/A')}")
+        lines.append(f"    Trend:    {summary.get('trend_prediction', 'N/A')}")
+        lines.append("")
+        if strategy:
+            lines.append("  📋 Strategy:")
+            lines.append(f"    Ideal Buy:    {strategy.get('ideal_buy', 'N/A')}")
+            lines.append(f"    Secondary Buy: {strategy.get('secondary_buy', 'N/A')}")
+            lines.append(f"    Stop Loss:    {strategy.get('stop_loss', 'N/A')}")
+            lines.append(f"    Take Profit:  {strategy.get('take_profit', 'N/A')}")
+            lines.append("")
+        
+        analysis_summary = summary.get('analysis_summary', '')
+        if analysis_summary:
+            lines.append("  📝 Analysis:")
+            for line in analysis_summary.split('\n')[:10]:
+                lines.append(f"    {line}")
+    
+    else:
+        # Generic fallback with JSON
+        lines.append(f"Command: {command}")
+        lines.append(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+    
+    return "\n".join(lines)
+
+
+# ============================================================
+# Command Handlers
+# ============================================================
+
+def cmd_analyze(stock_code: str, args) -> Dict[str, Any]:
+    """Run full AI analysis on a stock."""
+    import uuid
+    from src.services.analysis_service import AnalysisService
+    
+    try:
+        query_id = uuid.uuid4().hex
+        service = AnalysisService()
+        result = service.analyze_stock(
+            stock_code=stock_code,
+            report_type=getattr(args, 'report_type', 'detailed'),
+            force_refresh=getattr(args, 'force_refresh', False),
+            query_id=query_id
+        )
+        
+        if result is None:
+            return {"error": f"Failed to analyze stock {stock_code}"}
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def cmd_quote(stock_code: str, args) -> Dict[str, Any]:
+    """Get real-time stock quote."""
+    from data_provider import DataFetcherManager
+    
+    try:
+        manager = DataFetcherManager()
+        quote = manager.get_realtime_quote(stock_code)
+        
+        if quote is None:
+            return {"error": f"No quote data for {stock_code}"}
+        
+        return {
+            "code": quote.code,
+            "name": quote.name,
+            "price": quote.price,
+            "open": quote.open_price,  # open_price in UnifiedRealtimeQuote
+            "high": quote.high,
+            "low": quote.low,
+            "volume": quote.volume,
+            "amount": quote.amount,
+            "change_pct": quote.change_pct,
+            "turnover_rate": getattr(quote, 'turnover_rate', None),
+            "pre_close": getattr(quote, 'pre_close', None),
+        }
+        
+    except Exception as e:
+        logger.error(f"Quote failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def cmd_trend(stock_code: str, args) -> Dict[str, Any]:
+    """Run technical trend analysis."""
+    from src.agent.tools.registry import get_default_registry
+    
+    try:
+        registry = get_default_registry()
+        result, _ = registry.execute_with_cache("analyze_trend", stock_code=stock_code)
+        return result
+    except Exception as e:
+        logger.error(f"Trend analysis failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def cmd_news(stock_code: str, args) -> Dict[str, Any]:
+    """Search stock news."""
+    from src.agent.tools.registry import get_default_registry
+    
+    try:
+        registry = get_default_registry()
+        days = getattr(args, 'days', 7)
+        result = registry.execute("search_stock_news", stock_code=stock_code, days=days)
+        return result
+    except Exception as e:
+        logger.error(f"News search failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def cmd_ma(stock_code: str, args) -> Dict[str, Any]:
+    """Calculate moving averages."""
+    from src.agent.tools.registry import get_default_registry
+    
+    try:
+        registry = get_default_registry()
+        days = getattr(args, 'days', 120)
+        periods = getattr(args, 'periods', None)
+        result, _ = registry.execute_with_cache(
+            "calculate_ma", 
+            stock_code=stock_code, 
+            periods=periods,
+            days=days
+        )
+        return result
+    except Exception as e:
+        logger.error(f"MA calculation failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def cmd_pattern(stock_code: str, args) -> Dict[str, Any]:
+    """Detect K-line patterns."""
+    from src.agent.tools.registry import get_default_registry
+    
+    try:
+        registry = get_default_registry()
+        days = getattr(args, 'days', 60)
+        result, _ = registry.execute_with_cache("analyze_pattern", stock_code=stock_code, days=days)
+        return result
+    except Exception as e:
+        logger.error(f"Pattern analysis failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def cmd_volume(stock_code: str, args) -> Dict[str, Any]:
+    """Analyze volume-price relationship."""
+    from src.agent.tools.registry import get_default_registry
+    
+    try:
+        registry = get_default_registry()
+        days = getattr(args, 'days', 30)
+        result, _ = registry.execute_with_cache("get_volume_analysis", stock_code=stock_code, days=days)
+        return result
+    except Exception as e:
+        logger.error(f"Volume analysis failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def cmd_levels(stock_code: str, args) -> Dict[str, Any]:
+    """Get support/resistance levels."""
+    from src.agent.tools.registry import get_default_registry
+    
+    try:
+        registry = get_default_registry()
+        days = getattr(args, 'days', 120)
+        result, _ = registry.execute_with_cache("get_probability_levels", stock_code=stock_code, days=days)
+        return result
+    except Exception as e:
+        logger.error(f"Levels analysis failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def cmd_batch(stock_codes: List[str], args) -> Dict[str, Any]:
+    """Run batch analysis on multiple stocks."""
+    from src.agent.tools.registry import get_default_registry
+    
+    results = []
+    errors = []
+    
+    try:
+        registry = get_default_registry()
+        
+        for code in stock_codes:
+            try:
+                # Get quote for each stock
+                quote = registry.execute("get_realtime_quote", stock_code=code)
+                results.append({
+                    "code": code,
+                    "quote": quote if "error" not in quote else None,
+                    "error": quote.get("error") if "error" in quote else None
+                })
+            except Exception as e:
+                errors.append({"code": code, "error": str(e)})
+        
+        return {
+            "total": len(stock_codes),
+            "success": len(results) - len(errors),
+            "errors": len(errors),
+            "results": results,
+        }
+        
+    except Exception as e:
+        logger.error(f"Batch analysis failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+# ============================================================
+# CLI Entry Point
+# ============================================================
+
+def main():
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(
+        prog="dsa-cli",
+        description="Daily Stock Analysis CLI - A-share stock analysis tool for OpenClaw integration",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  dsa-cli analyze 600519          # Full AI analysis
+  dsa-cli quote 600519            # Real-time quote
+  dsa-cli trend 600519            # Technical trend
+  dsa-cli news 600519             # Stock news
+  dsa-cli batch 600519,000858     # Batch quotes
+  dsa-cli quote 600519 --json     # JSON output
+  dsa-cli analyze 600519 --brief  # Brief output
+
+For OpenClaw integration:
+  Use --json for structured output
+  Use --brief for reduced token consumption
+        """
+    )
+    
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output as JSON (for OpenClaw parsing)"
+    )
+    
+    parser.add_argument(
+        "--brief",
+        action="store_true",
+        help="Brief output (reduced token consumption)"
+    )
+    
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=60,
+        help="Historical days for analysis (default: 60)"
+    )
+    
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging"
+    )
+    
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    
+    # analyze command
+    analyze_parser = subparsers.add_parser("analyze", help="Full AI analysis")
+    analyze_parser.add_argument("stock_code", help="Stock code (e.g., 600519)")
+    analyze_parser.add_argument("--force-refresh", action="store_true", help="Force refresh data")
+    analyze_parser.add_argument("--report-type", choices=["detailed", "brief"], default="detailed")
+    analyze_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    analyze_parser.add_argument("--brief", action="store_true", help="Brief output")
+    
+    # quote command
+    quote_parser = subparsers.add_parser("quote", help="Real-time quote")
+    quote_parser.add_argument("stock_code", help="Stock code")
+    quote_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    quote_parser.add_argument("--brief", action="store_true", help="Brief output")
+    
+    # trend command
+    trend_parser = subparsers.add_parser("trend", help="Technical trend analysis")
+    trend_parser.add_argument("stock_code", help="Stock code")
+    trend_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    trend_parser.add_argument("--brief", action="store_true", help="Brief output")
+    
+    # news command
+    news_parser = subparsers.add_parser("news", help="Search stock news")
+    news_parser.add_argument("stock_code", help="Stock code")
+    news_parser.add_argument("--days", type=int, default=7, help="News from last N days")
+    news_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    news_parser.add_argument("--brief", action="store_true", help="Brief output")
+    
+    # ma command
+    ma_parser = subparsers.add_parser("ma", help="Moving average analysis")
+    ma_parser.add_argument("stock_code", help="Stock code")
+    ma_parser.add_argument("--periods", help="MA periods (e.g., '5,10,20,60')")
+    ma_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    ma_parser.add_argument("--brief", action="store_true", help="Brief output")
+    
+    # pattern command
+    pattern_parser = subparsers.add_parser("pattern", help="K-line pattern recognition")
+    pattern_parser.add_argument("stock_code", help="Stock code")
+    pattern_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    pattern_parser.add_argument("--brief", action="store_true", help="Brief output")
+    
+    # volume command
+    volume_parser = subparsers.add_parser("volume", help="Volume-price analysis")
+    volume_parser.add_argument("stock_code", help="Stock code")
+    volume_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    volume_parser.add_argument("--brief", action="store_true", help="Brief output")
+    
+    # levels command
+    levels_parser = subparsers.add_parser("levels", help="Support/resistance levels")
+    levels_parser.add_argument("stock_code", help="Stock code")
+    levels_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    levels_parser.add_argument("--brief", action="store_true", help="Brief output")
+    
+    # batch command
+    batch_parser = subparsers.add_parser("batch", help="Batch analysis")
+    batch_parser.add_argument("stock_codes", help="Comma-separated stock codes (e.g., 600519,000858)")
+    batch_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    batch_parser.add_argument("--brief", action="store_true", help="Brief output")
+    
+    args = parser.parse_args()
+    
+    # Setup logging
+    log_level = logging.DEBUG if args.debug else logging.WARNING
+    setup_logging(console_level=log_level, log_prefix="dsa-cli")
+    
+    # No command specified
+    if not args.command:
+        parser.print_help()
+        return 0
+    
+    # Register tools if needed
+    from src.agent.tools.data_tools import ALL_DATA_TOOLS
+    from src.agent.tools.search_tools import ALL_SEARCH_TOOLS
+    from src.agent.tools.analysis_tools import ALL_ANALYSIS_TOOLS
+    from src.agent.tools.registry import get_default_registry
+    
+    registry = get_default_registry()
+    for tool in ALL_DATA_TOOLS + ALL_SEARCH_TOOLS + ALL_ANALYSIS_TOOLS:
+        if tool.name not in registry:
+            registry.register(tool)
+    
+    # Execute command
+    result: Dict[str, Any] = {}
+    
+    if args.command == "analyze":
+        stock_code = canonical_stock_code(args.stock_code)
+        result = cmd_analyze(stock_code, args)
+    
+    elif args.command == "quote":
+        stock_code = canonical_stock_code(args.stock_code)
+        result = cmd_quote(stock_code, args)
+    
+    elif args.command == "trend":
+        stock_code = canonical_stock_code(args.stock_code)
+        result = cmd_trend(stock_code, args)
+    
+    elif args.command == "news":
+        stock_code = canonical_stock_code(args.stock_code)
+        result = cmd_news(stock_code, args)
+    
+    elif args.command == "ma":
+        stock_code = canonical_stock_code(args.stock_code)
+        result = cmd_ma(stock_code, args)
+    
+    elif args.command == "pattern":
+        stock_code = canonical_stock_code(args.stock_code)
+        result = cmd_pattern(stock_code, args)
+    
+    elif args.command == "volume":
+        stock_code = canonical_stock_code(args.stock_code)
+        result = cmd_volume(stock_code, args)
+    
+    elif args.command == "levels":
+        stock_code = canonical_stock_code(args.stock_code)
+        result = cmd_levels(stock_code, args)
+    
+    elif args.command == "batch":
+        codes = [canonical_stock_code(c.strip()) for c in args.stock_codes.split(",")]
+        result = cmd_batch(codes, args)
+    
+    else:
+        result = {"error": f"Unknown command: {args.command}"}
+    
+    # Format and print output
+    # Check for --json or --brief from either global args or subcommand args
+    use_json = getattr(args, 'json', False)
+    use_brief = getattr(args, 'brief', False)
+    
+    if use_json:
+        print(format_json(result))
+    elif use_brief:
+        print(format_brief(result, args.command))
+    else:
+        print(format_human(result, args.command))
+    
+    # Return exit code
+    return 0 if "error" not in result else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

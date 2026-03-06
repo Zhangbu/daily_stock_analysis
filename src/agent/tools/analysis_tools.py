@@ -7,7 +7,7 @@ Tools:
 """
 
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from src.agent.tools.registry import ToolParameter, ToolDefinition
 
@@ -517,9 +517,124 @@ analyze_pattern_tool = ToolDefinition(
 )
 
 
+# ============================================================
+# analyze_attribution — AI attribution analysis
+# ============================================================
+
+def _handle_analyze_attribution(stock_code: str, stock_name: str, price_change_pct: float, news_results: Optional[List[dict]] = None) -> dict:
+    """
+    Analyze the attribution of stock price movement (why it moved).
+    
+    Combines news event classification with price movement to determine
+    the primary cause (earnings, insider selling, market correction, etc.)
+    """
+    from src.ai_attribution import analyze_attribution
+    
+    if news_results is None:
+        news_results = []
+    
+    result = analyze_attribution(
+        stock_code=stock_code,
+        stock_name=stock_name,
+        price_change_pct=price_change_pct,
+        news_results=news_results,
+    )
+    
+    return result.to_dict()
+
+
+analyze_attribution_tool = ToolDefinition(
+    name="analyze_attribution",
+    description="Analyze the attribution of stock price movement. Determines WHY the stock moved "
+                "(earnings miss, insider selling, market correction, sector rotation, etc.). "
+                "Classifies news events and correlates them with price changes to identify "
+                "primary and secondary causes.",
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., '600519'",
+        ),
+        ToolParameter(
+            name="stock_name",
+            type="string",
+            description="Stock name in Chinese, e.g., '贵州茅台'",
+        ),
+        ToolParameter(
+            name="price_change_pct",
+            type="number",
+            description="Price change percentage for the day, e.g., -4.5",
+        ),
+        ToolParameter(
+            name="news_results",
+            type="array",
+            description="List of news search results with title, snippet, source, published_date",
+            required=False,
+            default=[],
+        ),
+    ],
+    handler=_handle_analyze_attribution,
+    category="analysis",
+)
+
+
+# ============================================================
+# get_probability_levels — Probability-based support/resistance
+# ============================================================
+
+def _handle_get_probability_levels(stock_code: str, days: int = 120) -> dict:
+    """
+    Calculate probability-based support and resistance levels.
+    
+    Analyzes historical price data to identify key price levels (integer levels,
+    previous highs/lows, moving averages, volume clusters) and calculates
+    the probability of bounce/break at each level.
+    """
+    from data_provider import DataFetcherManager
+    from src.probability_levels import analyze_probability_levels
+    import pandas as pd
+    
+    manager = DataFetcherManager()
+    df, source = manager.get_daily_data(stock_code, days=days)
+    
+    if df is None or df.empty:
+        return {"error": f"No historical data for {stock_code}"}
+    
+    result = analyze_probability_levels(df, stock_code)
+    
+    return result.to_dict()
+
+
+get_probability_levels_tool = ToolDefinition(
+    name="get_probability_levels",
+    description="Calculate probability-based support and resistance levels. "
+                "Identifies key price levels (integers, previous highs/lows, MAs, volume clusters) "
+                "and calculates historical bounce/break probability for each. "
+                "Returns strength rating (极强/强/中/弱/极弱) with confidence level.",
+    parameters=[
+        ToolParameter(
+            name="stock_code",
+            type="string",
+            description="Stock code, e.g., '600519'",
+        ),
+        ToolParameter(
+            name="days",
+            type="integer",
+            description="Number of trading days to analyze (default: 120)",
+            required=False,
+            default=120,
+        ),
+    ],
+    handler=_handle_get_probability_levels,
+    category="analysis",
+)
+
+
 ALL_ANALYSIS_TOOLS = [
     analyze_trend_tool,
     calculate_ma_tool,
     get_volume_analysis_tool,
     analyze_pattern_tool,
+    analyze_attribution_tool,
+    get_probability_levels_tool,
 ]

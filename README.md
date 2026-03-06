@@ -282,6 +282,46 @@ python main.py
 
 > 也可以使用 `python main.py --serve` (等效命令)
 
+## 🔗 OpenClaw 集成
+
+支持与 [OpenClaw](https://github.com/nicholasxuu/OpenClaw) 语音助手集成，实现语音控制股票分析。
+
+### 快速集成
+
+```bash
+# 1. 确保 dsa-cli 可执行
+./dsa-cli quote 600519 --json
+
+# 2. 复制 Skill 文件到 OpenClaw
+cp skills/dsa/SKILL.md /path/to/OpenClaw/skills/dsa/
+
+# 3. 配置环境变量
+export PATH="/path/to/daily_stock_analysis:$PATH"
+```
+
+### 语音命令示例
+
+| 语音命令 | 执行操作 |
+|----------|----------|
+| "分析茅台" | 完整 AI 分析，返回评分和操作建议 |
+| "茅台多少钱" | 实时行情报价 |
+| "茅台走势怎么样" | 技术趋势分析（MA/MACD/RSI） |
+| "茅台有什么新闻" | 搜索最新相关新闻 |
+
+### CLI 命令
+
+```bash
+dsa-cli analyze 600519 --json    # 完整 AI 分析
+dsa-cli quote 600519 --json      # 实时行情
+dsa-cli trend 600519 --json      # 技术趋势
+dsa-cli news 600519 --json       # 股票新闻
+dsa-cli batch 600519,000858      # 批量分析
+```
+
+> 📖 详细部署指南请参考 [OpenClaw 集成文档](docs/openclaw-integration.md)
+
+---
+
 ## 🗺️ Roadmap
 
 查看已支持的功能和未来规划：[更新日志](docs/CHANGELOG.md)
