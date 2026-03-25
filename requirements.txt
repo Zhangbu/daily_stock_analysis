@@ -24,6 +24,9 @@ lark-oapi>=1.0.0             # 飞书API
 pandas>=2.0.0               # 数据分析
 numpy>=1.24.0               # 数值计算
 json-repair>=0.55.1         # JSON 修复
+pyarrow>=14.0.0             # Parquet格式支持（pandas读写的底层引擎）
+pyyaml>=6.0.0              # YAML配置文件解析（策略加载器）
+tqdm>=4.65.0               # 进度条显示（批量数据获取）
 
 # AI 分析
 google-generativeai>=0.8.0  # Gemini API (used by analyzer.py and image_stock_extractor.py)

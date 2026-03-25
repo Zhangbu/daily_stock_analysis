@@ -15,12 +15,67 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
-from json_repair import repair_json
 
 from src.agent.llm_adapter import get_thinking_extra_body
 from src.config import get_config
+from src.llm.providers import (
+    init_anthropic_fallback,
+    init_gemini_model,
+    init_openai_fallback,
+    switch_to_gemini_fallback_model,
+)
+from src.llm.result_parser import fix_json_string, parse_response, parse_text_response
 
 logger = logging.getLogger(__name__)
+
+_ASCII_UNSAFE_TABLE_CHARS = {
+    0x2502: "|",  # │
+    0x2503: "|",  # ┃
+    0x2506: "|",  # ┆
+    0x2507: "|",  # ┇
+    0x250A: "|",  # ┊
+    0x250B: "|",  # ┋
+    0x254E: "|",  # ╎
+    0x254F: "|",  # ╏
+    0x2500: "-",  # ─
+    0x2501: "-",  # ━
+    0x2504: "-",  # ┄
+    0x2505: "-",  # ┅
+    0x2508: "-",  # ┈
+    0x2509: "-",  # ┉
+    0x2550: "=",  # ═
+    0x256A: "+",  # ╪
+    0x256B: "+",  # ╫
+    0x256C: "+",  # ╬
+    0x253C: "+",  # ┼
+    0x256D: "+",  # ╭
+    0x256E: "+",  # ╮
+    0x256F: "+",  # ╯
+    0x2570: "+",  # ╰
+    0x250C: "+",  # ┌
+    0x2510: "+",  # ┐
+    0x2514: "+",  # └
+    0x2518: "+",  # ┘
+}
+
+
+def _sanitize_ascii_unsafe_text(text: str) -> str:
+    """Normalize common box-drawing characters for strict ASCII encoders."""
+    return text.translate(_ASCII_UNSAFE_TABLE_CHARS)
+
+
+def _safe_exception_text(exc: Exception) -> str:
+    """Return an ASCII-safe exception string for logging."""
+    return str(exc).encode("ascii", errors="backslashreplace").decode("ascii")
+
+
+def _is_ascii_encode_error(error_text: str) -> bool:
+    lower_msg = error_text.lower()
+    return (
+        "ascii" in lower_msg
+        and "codec can't encode" in lower_msg
+        and "ordinal not in range(128)" in lower_msg
+    )
 
 
 # 股票名称映射（常见股票）
@@ -565,28 +620,7 @@ class GeminiAnalyzer:
 
         使用 Anthropic Messages API：https://docs.anthropic.com/en/api/messages
         """
-        config = get_config()
-        anthropic_key_valid = (
-            config.anthropic_api_key
-            and not config.anthropic_api_key.startswith('your_')
-            and len(config.anthropic_api_key) > 10
-        )
-        if not anthropic_key_valid:
-            logger.debug("Anthropic API Key not configured or invalid")
-            return
-        try:
-            from anthropic import Anthropic
-
-            self._anthropic_client = Anthropic(api_key=config.anthropic_api_key)
-            self._current_model_name = config.anthropic_model
-            self._use_anthropic = True
-            logger.info(
-                f"Anthropic Claude API init OK (model: {config.anthropic_model})"
-            )
-        except ImportError:
-            logger.error("anthropic package not installed, run: pip install anthropic")
-        except Exception as e:
-            logger.error(f"Anthropic API init failed: {e}")
+        init_anthropic_fallback(self, get_config())
 
     def _init_openai_fallback(self) -> None:
         """
@@ -598,50 +632,7 @@ class GeminiAnalyzer:
         - 通义千问
         - Moonshot 等
         """
-        config = get_config()
-
-        # 检查 OpenAI API Key 是否有效（过滤占位符）
-        openai_key_valid = (
-            config.openai_api_key and
-            not config.openai_api_key.startswith('your_') and
-            len(config.openai_api_key) >= 8
-        )
-
-        if not openai_key_valid:
-            logger.debug("OpenAI 兼容 API 未配置或配置无效")
-            return
-
-        # 分离 import 和客户端创建，以便提供更准确的错误信息
-        try:
-            from openai import OpenAI
-        except ImportError:
-            logger.error("未安装 openai 库，请运行: pip install openai")
-            return
-
-        try:
-            # base_url 可选，不填则使用 OpenAI 官方默认地址
-            client_kwargs = {"api_key": config.openai_api_key}
-            if config.openai_base_url and config.openai_base_url.startswith('http'):
-                client_kwargs["base_url"] = config.openai_base_url
-            if config.openai_base_url and "aihubmix.com" in config.openai_base_url:
-                client_kwargs["default_headers"] = {"APP-Code": "GPIJ3886"}
-
-            self._openai_client = OpenAI(**client_kwargs)
-            self._current_model_name = config.openai_model
-            self._use_openai = True
-            logger.info(f"OpenAI 兼容 API 初始化成功 (base_url: {config.openai_base_url}, model: {config.openai_model})")
-        except ImportError as e:
-            # 依赖缺失（如 socksio）
-            if 'socksio' in str(e).lower() or 'socks' in str(e).lower():
-                logger.error(f"OpenAI 客户端需要 SOCKS 代理支持，请运行: pip install httpx[socks] 或 pip install socksio")
-            else:
-                logger.error(f"OpenAI 依赖缺失: {e}")
-        except Exception as e:
-            error_msg = str(e).lower()
-            if 'socks' in error_msg or 'socksio' in error_msg or 'proxy' in error_msg:
-                logger.error(f"OpenAI 代理配置错误: {e}，如使用 SOCKS 代理请运行: pip install httpx[socks]")
-            else:
-                logger.error(f"OpenAI 兼容 API 初始化失败: {e}")
+        init_openai_fallback(self, get_config())
 
     def _init_model(self) -> None:
         """
@@ -651,43 +642,7 @@ class GeminiAnalyzer:
         - 使用 gemini-3-flash-preview 或 gemini-2.5-flash 模型
         - 不启用 Google Search（使用外部 Tavily/SerpAPI 搜索）
         """
-        try:
-            import google.generativeai as genai
-
-            # 配置 API Key
-            genai.configure(api_key=self._api_key)
-
-            # 从配置获取模型名称
-            config = get_config()
-            model_name = config.gemini_model
-            fallback_model = config.gemini_model_fallback
-
-            # 不再使用 Google Search Grounding（已知有兼容性问题）
-            # 改为使用外部搜索服务（Tavily/SerpAPI）预先获取新闻
-
-            # 尝试初始化主模型
-            try:
-                self._model = genai.GenerativeModel(
-                    model_name=model_name,
-                    system_instruction=self.SYSTEM_PROMPT,
-                )
-                self._current_model_name = model_name
-                self._using_fallback = False
-                logger.info(f"Gemini 模型初始化成功 (模型: {model_name})")
-            except Exception as model_error:
-                # 尝试备选模型
-                logger.warning(f"主模型 {model_name} 初始化失败: {model_error}，尝试备选模型 {fallback_model}")
-                self._model = genai.GenerativeModel(
-                    model_name=fallback_model,
-                    system_instruction=self.SYSTEM_PROMPT,
-                )
-                self._current_model_name = fallback_model
-                self._using_fallback = True
-                logger.info(f"Gemini 备选模型初始化成功 (模型: {fallback_model})")
-
-        except Exception as e:
-            logger.error(f"Gemini 模型初始化失败: {e}")
-            self._model = None
+        init_gemini_model(self, get_config())
 
     def _switch_to_fallback_model(self) -> bool:
         """
@@ -696,23 +651,7 @@ class GeminiAnalyzer:
         Returns:
             是否成功切换
         """
-        try:
-            import google.generativeai as genai
-            config = get_config()
-            fallback_model = config.gemini_model_fallback
-
-            logger.warning(f"[LLM] 切换到备选模型: {fallback_model}")
-            self._model = genai.GenerativeModel(
-                model_name=fallback_model,
-                system_instruction=self.SYSTEM_PROMPT,
-            )
-            self._current_model_name = fallback_model
-            self._using_fallback = True
-            logger.info(f"[LLM] 备选模型 {fallback_model} 初始化成功")
-            return True
-        except Exception as e:
-            logger.error(f"[LLM] 切换备选模型失败: {e}")
-            return False
+        return switch_to_gemini_fallback_model(self, get_config())
 
     def is_available(self) -> bool:
         """检查分析器是否可用。"""
@@ -736,6 +675,7 @@ class GeminiAnalyzer:
         config = get_config()
         max_retries = config.gemini_max_retries
         base_delay = config.gemini_retry_delay
+        prompt_for_openai = prompt
         temperature = generation_config.get(
             'temperature', config.anthropic_temperature
         )
@@ -809,7 +749,7 @@ class GeminiAnalyzer:
                 "model": model_name,
                 "messages": [
                     {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
+                    {"role": "user", "content": prompt_for_openai},
                 ],
                 "temperature": generation_config.get('temperature', config.openai_temperature),
             }
@@ -864,7 +804,19 @@ class GeminiAnalyzer:
                     raise ValueError("OpenAI API 返回空响应")
                     
             except Exception as e:
-                error_str = str(e)
+                error_str = _safe_exception_text(e)
+
+                # Some OpenAI-compatible providers may reject box-drawing chars
+                # when an internal component incorrectly uses ASCII encoding.
+                if _is_ascii_encode_error(error_str):
+                    sanitized_prompt = _sanitize_ascii_unsafe_text(prompt_for_openai)
+                    if sanitized_prompt != prompt_for_openai:
+                        prompt_for_openai = sanitized_prompt
+                        logger.warning("[OpenAI] Detected ASCII encoding issue in prompt, normalized table characters and retrying.")
+                        if attempt == max_retries - 1:
+                            raise
+                        continue
+
                 is_rate_limit = '429' in error_str or 'rate' in error_str.lower() or 'quota' in error_str.lower()
                 
                 if is_rate_limit:
@@ -1438,112 +1390,11 @@ class GeminiAnalyzer:
         尝试从响应中提取 JSON 格式的分析结果，包含 dashboard 字段
         如果解析失败，尝试智能提取或返回默认结果
         """
-        try:
-            # 清理响应文本：移除 markdown 代码块标记
-            cleaned_text = response_text
-            if '```json' in cleaned_text:
-                cleaned_text = cleaned_text.replace('```json', '').replace('```', '')
-            elif '```' in cleaned_text:
-                cleaned_text = cleaned_text.replace('```', '')
-            
-            # 尝试找到 JSON 内容
-            json_start = cleaned_text.find('{')
-            json_end = cleaned_text.rfind('}') + 1
-            
-            if json_start >= 0 and json_end > json_start:
-                json_str = cleaned_text[json_start:json_end]
-                
-                # 尝试修复常见的 JSON 问题
-                json_str = self._fix_json_string(json_str)
-                
-                data = json.loads(json_str)
-                
-                # 提取 dashboard 数据
-                dashboard = data.get('dashboard', None)
-
-                # 优先使用 AI 返回的股票名称（如果原名称无效或包含代码）
-                ai_stock_name = data.get('stock_name')
-                if ai_stock_name and (name.startswith('股票') or name == code or 'Unknown' in name):
-                    name = ai_stock_name
-
-                # 解析所有字段，使用默认值防止缺失
-                # 解析 decision_type，如果没有则根据 operation_advice 推断
-                decision_type = data.get('decision_type', '')
-                if not decision_type:
-                    op = data.get('operation_advice', '持有')
-                    if op in ['买入', '加仓', '强烈买入']:
-                        decision_type = 'buy'
-                    elif op in ['卖出', '减仓', '强烈卖出']:
-                        decision_type = 'sell'
-                    else:
-                        decision_type = 'hold'
-                
-                return AnalysisResult(
-                    code=code,
-                    name=name,
-                    # 核心指标
-                    sentiment_score=int(data.get('sentiment_score', 50)),
-                    trend_prediction=data.get('trend_prediction', '震荡'),
-                    operation_advice=data.get('operation_advice', '持有'),
-                    decision_type=decision_type,
-                    confidence_level=data.get('confidence_level', '中'),
-                    # 决策仪表盘
-                    dashboard=dashboard,
-                    # 走势分析
-                    trend_analysis=data.get('trend_analysis', ''),
-                    short_term_outlook=data.get('short_term_outlook', ''),
-                    medium_term_outlook=data.get('medium_term_outlook', ''),
-                    # 技术面
-                    technical_analysis=data.get('technical_analysis', ''),
-                    ma_analysis=data.get('ma_analysis', ''),
-                    volume_analysis=data.get('volume_analysis', ''),
-                    pattern_analysis=data.get('pattern_analysis', ''),
-                    # 基本面
-                    fundamental_analysis=data.get('fundamental_analysis', ''),
-                    sector_position=data.get('sector_position', ''),
-                    company_highlights=data.get('company_highlights', ''),
-                    # 情绪面/消息面
-                    news_summary=data.get('news_summary', ''),
-                    market_sentiment=data.get('market_sentiment', ''),
-                    hot_topics=data.get('hot_topics', ''),
-                    # 综合
-                    analysis_summary=data.get('analysis_summary', '分析完成'),
-                    key_points=data.get('key_points', ''),
-                    risk_warning=data.get('risk_warning', ''),
-                    buy_reason=data.get('buy_reason', ''),
-                    # 元数据
-                    search_performed=data.get('search_performed', False),
-                    data_sources=data.get('data_sources', '技术面数据'),
-                    success=True,
-                )
-            else:
-                # 没有找到 JSON，尝试从纯文本中提取信息
-                logger.warning(f"无法从响应中提取 JSON，使用原始文本分析")
-                return self._parse_text_response(response_text, code, name)
-                
-        except json.JSONDecodeError as e:
-            logger.warning(f"JSON 解析失败: {e}，尝试从文本提取")
-            return self._parse_text_response(response_text, code, name)
+        return parse_response(response_text, code, name, AnalysisResult)
     
     def _fix_json_string(self, json_str: str) -> str:
         """修复常见的 JSON 格式问题"""
-        import re
-        
-        # 移除注释
-        json_str = re.sub(r'//.*?\n', '\n', json_str)
-        json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)
-        
-        # 修复尾随逗号
-        json_str = re.sub(r',\s*}', '}', json_str)
-        json_str = re.sub(r',\s*]', ']', json_str)
-        
-        # 确保布尔值是小写
-        json_str = json_str.replace('True', 'true').replace('False', 'false')
-        
-        # fix by json-repair
-        json_str = repair_json(json_str)
-        
-        return json_str
+        return fix_json_string(json_str)
     
     def _parse_text_response(
         self, 
@@ -1552,50 +1403,7 @@ class GeminiAnalyzer:
         name: str
     ) -> AnalysisResult:
         """从纯文本响应中尽可能提取分析信息"""
-        # 尝试识别关键词来判断情绪
-        sentiment_score = 50
-        trend = '震荡'
-        advice = '持有'
-        
-        text_lower = response_text.lower()
-        
-        # 简单的情绪识别
-        positive_keywords = ['看多', '买入', '上涨', '突破', '强势', '利好', '加仓', 'bullish', 'buy']
-        negative_keywords = ['看空', '卖出', '下跌', '跌破', '弱势', '利空', '减仓', 'bearish', 'sell']
-        
-        positive_count = sum(1 for kw in positive_keywords if kw in text_lower)
-        negative_count = sum(1 for kw in negative_keywords if kw in text_lower)
-        
-        if positive_count > negative_count + 1:
-            sentiment_score = 65
-            trend = '看多'
-            advice = '买入'
-            decision_type = 'buy'
-        elif negative_count > positive_count + 1:
-            sentiment_score = 35
-            trend = '看空'
-            advice = '卖出'
-            decision_type = 'sell'
-        else:
-            decision_type = 'hold'
-        
-        # 截取前500字符作为摘要
-        summary = response_text[:500] if response_text else '无分析结果'
-        
-        return AnalysisResult(
-            code=code,
-            name=name,
-            sentiment_score=sentiment_score,
-            trend_prediction=trend,
-            operation_advice=advice,
-            decision_type=decision_type,
-            confidence_level='低',
-            analysis_summary=summary,
-            key_points='JSON解析失败，仅供参考',
-            risk_warning='分析结果可能不准确，建议结合其他信息判断',
-            raw_response=response_text,
-            success=True,
-        )
+        return parse_text_response(response_text, code, name, AnalysisResult)
     
     def batch_analyze(
         self, 

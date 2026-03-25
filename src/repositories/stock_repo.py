@@ -14,7 +14,7 @@ from datetime import date
 from typing import Optional, List, Dict, Any
 
 import pandas as pd
-from sqlalchemy import and_, desc, select
+from sqlalchemy import and_, desc, func, select
 
 from src.storage import DatabaseManager, StockDaily
 
@@ -159,3 +159,56 @@ class StockRepository:
                 .limit(eval_window_days)
             ).scalars().all()
             return list(rows)
+
+    def get_latest_trade_date(self, code: str) -> Optional[date]:
+        """Return the latest stored trade date for one stock."""
+        with self.db.get_session() as session:
+            latest = session.execute(
+                select(func.max(StockDaily.date)).where(StockDaily.code == code)
+            ).scalar_one_or_none()
+            return latest
+
+    def get_latest_snapshots(self) -> List[StockDaily]:
+        """Return the latest stored row for each stock code."""
+        with self.db.get_session() as session:
+            latest_dates = (
+                select(
+                    StockDaily.code.label("code"),
+                    func.max(StockDaily.date).label("latest_date"),
+                )
+                .group_by(StockDaily.code)
+                .subquery()
+            )
+            rows = session.execute(
+                select(StockDaily)
+                .join(
+                    latest_dates,
+                    and_(
+                        StockDaily.code == latest_dates.c.code,
+                        StockDaily.date == latest_dates.c.latest_date,
+                    ),
+                )
+                .order_by(StockDaily.code)
+            ).scalars().all()
+            return list(rows)
+
+    def get_latest_trade_dates(self, codes: List[str]) -> Dict[str, Optional[date]]:
+        """Return latest stored trade date map for multiple stock codes."""
+        normalized = [str(code).strip().upper() for code in codes if str(code).strip()]
+        if not normalized:
+            return {}
+
+        with self.db.get_session() as session:
+            rows = session.execute(
+                select(
+                    StockDaily.code,
+                    func.max(StockDaily.date).label("latest_date"),
+                )
+                .where(StockDaily.code.in_(normalized))
+                .group_by(StockDaily.code)
+            ).all()
+
+        result = {str(code).upper(): None for code in normalized}
+        for code, latest_date in rows:
+            result[str(code).upper()] = latest_date
+        return result

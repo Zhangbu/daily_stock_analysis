@@ -252,7 +252,56 @@ class BacktestServiceTestCase(unittest.TestCase):
             self.assertEqual(overall.completed_count, 2)
             self.assertEqual(overall.win_count, 2)
 
+    def test_run_backtest_filters_by_strategy_ids(self) -> None:
+        old_created_at = datetime(2024, 1, 1, 0, 0, 0)
+
+        with self.db.get_session() as session:
+            session.add(
+                AnalysisHistory(
+                    query_id="q-strategy",
+                    code="000001",
+                    name="平安银行",
+                    report_type="simple",
+                    sentiment_score=85,
+                    operation_advice="买入",
+                    trend_prediction="看多",
+                    analysis_summary="strategy test",
+                    stop_loss=9.5,
+                    take_profit=11.0,
+                    created_at=old_created_at,
+                    context_snapshot='{"enhanced_context": {"date": "2024-01-01"}, "selected_strategies": ["bull_trend"]}',
+                )
+            )
+            session.add(StockDaily(code="000001", date=date(2024, 1, 1), open=10.0, high=10.2, low=9.8, close=10.0))
+            session.add_all([
+                StockDaily(code="000001", date=date(2024, 1, 2), high=11.2, low=10.0, close=10.8),
+                StockDaily(code="000001", date=date(2024, 1, 3), high=10.9, low=10.2, close=10.7),
+                StockDaily(code="000001", date=date(2024, 1, 4), high=10.8, low=10.3, close=10.6),
+            ])
+            session.commit()
+
+        service = BacktestService(self.db)
+        stats = service.run_backtest(
+            code=None,
+            strategy_ids=["bull_trend"],
+            force=False,
+            eval_window_days=3,
+            min_age_days=0,
+            limit=10,
+        )
+
+        self.assertEqual(stats["processed"], 1)
+        self.assertEqual(stats["saved"], 1)
+
+        data = service.get_recent_evaluations(code=None, strategy_ids=["bull_trend"], limit=10, page=1)
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["items"][0]["code"], "000001")
+        self.assertEqual(data["items"][0]["strategy_ids"], ["bull_trend"])
+
+        summary = service.get_summary(scope="overall", code=None, strategy_ids=["bull_trend"], eval_window_days=3)
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["total_evaluations"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
-

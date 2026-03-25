@@ -43,6 +43,20 @@ from api.v1.schemas.backtest import (
     BacktestResultsResponse,
     PerformanceMetrics,
 )
+from api.v1.schemas.strategy_backtest import (
+    StrategySignalInfo,
+    StrategySignalListResponse,
+    StrategySignalBacktestRunRequest,
+    StrategySignalBacktestRunResponse,
+    StrategySignalBacktestItem,
+    StrategySignalMetrics,
+    StrategySignalTradeItem,
+)
+from api.v1.schemas.market_sync import (
+    MarketSyncRunRequest,
+    MarketSyncRunResponse,
+    MarketSyncStatusResponse,
+)
 from api.v1.schemas.system_config import (
     SystemConfigFieldSchema,
     SystemConfigCategorySchema,
@@ -90,6 +104,16 @@ __all__ = [
     "BacktestResultItem",
     "BacktestResultsResponse",
     "PerformanceMetrics",
+    "StrategySignalInfo",
+    "StrategySignalListResponse",
+    "StrategySignalBacktestRunRequest",
+    "StrategySignalBacktestRunResponse",
+    "StrategySignalBacktestItem",
+    "StrategySignalMetrics",
+    "StrategySignalTradeItem",
+    "MarketSyncRunRequest",
+    "MarketSyncRunResponse",
+    "MarketSyncStatusResponse",
     # system config
     "SystemConfigFieldSchema",
     "SystemConfigCategorySchema",

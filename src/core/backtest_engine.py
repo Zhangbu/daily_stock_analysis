@@ -47,8 +47,8 @@ class EvaluationConfig:
     engine_version: str = "v1"
 
 
-class BacktestEngine:
-    """Long-only daily-bar backtesting engine."""
+class AdviceEvaluationEngine:
+    """Long-only daily-bar advice evaluation engine."""
 
     # Operation advice keywords (Chinese + English)
     _BULLISH_KEYWORDS = (
@@ -552,3 +552,7 @@ class BacktestEngine:
             "eval_status": status_counts,
             "first_hit": first_hit_counts,
         }
+
+
+# Backward-compatible alias during migration.
+BacktestEngine = AdviceEvaluationEngine

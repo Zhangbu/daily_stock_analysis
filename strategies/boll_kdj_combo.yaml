@@ -6,9 +6,35 @@
 # 2. 布林带上轨附近 + KDJ 死叉/超买 = 卖出信号
 # 3. 布林带带宽收窄 = 变盘预警
 
-name: "BOLL+KDJ组合策略"
+name: boll_kdj_combo
+display_name: 布林带KDJ组合
 version: "1.0"
 description: "利用布林带和KDJ指标组合判断买卖点"
+category: oscillator
+core_rules: [2, 3, 4]
+required_tools:
+  - get_daily_history
+  - analyze_trend
+
+instructions: |
+  **BOLL + KDJ 组合策略**
+
+  识别布林带位置与 KDJ 拐点的共振信号，重点关注：
+
+  1. 下轨附近的超卖反弹机会：
+     - 价格接近或跌破布林带下轨
+     - KDJ 进入超卖区或形成金叉
+     - 带宽收窄后再次放量更优
+
+  2. 上轨附近的减仓或卖出信号：
+     - 价格逼近布林带上轨
+     - KDJ 进入超买区或形成死叉
+     - J 值极端冲高需要警惕回落
+
+  3. 对信号做风险确认：
+     - 结合量能判断突破是否有效
+     - 若价格偏离中轨过大，避免追高
+     - 若趋势与信号背离，优先控制仓位
 
 # 指标参数配置
 indicators:
@@ -107,4 +133,3 @@ auxiliary:
   - name: "Volume"
     purpose: "量能确认"
     condition: "缩量下跌后放量上涨更可靠"
-+++++++ REPLACE

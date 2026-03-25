@@ -8,6 +8,136 @@
 ## [Unreleased]
 
 ### 新增（#minor）
+- 🌍 **市场筛选支持 A股 / 美股切换**
+  - Web 与 API 筛选接口新增 `market` 与 `data_mode` 参数
+  - 数据库评分模式可基于本地已同步历史数据为候选股票生成分数与原因
+  - `.env` 新增 `US_STOCK_LIST` 与市场同步相关配置，便于启动后后台慢速补齐日线数据
+- 📊 **市场筛选页新增同步状态与候选池解释**
+  - 筛选页新增市场同步状态面板，可查看处理进度、错误数、当前代码并手动触发同步
+  - 数据库评分结果新增排名、机会等级、Top 候选和因子分解，便于直接挑选最有潜力的前 N 只股票
+  - 同步状态新增自选股优先完成度指标，便于确认核心自选池是否已经优先补齐
+  - 数据库评分新增波动率、回撤风险和近 60 日胜率代理因子，提升候选池稳健性
+  - 筛选结果支持导出候选池 CSV，并可直接将候选股票加入自选股列表
+  - 市场同步会优先调度本地缺失或较久未更新的股票，减少无效重复抓取
+  - 候选池快照列表新增平均跟踪收益概览，便于回看不同批次筛选后的表现
+  - 筛选页新增 Top N 最新分析摘要面板，直接展示候选股票的操作建议与趋势判断
+
+### 改进（#patch）
+- 🧭 **前端筛选页入口与页面头部文案更清晰**
+  - 侧边导航由“荐股”调整为“市场筛选”
+  - 筛选页头部明确显示当前市场与数据模式
+  - 美股模式下隐藏 A股专属板块过滤，避免误解
+
+### 优化（#patch）
+- 🏗️ **架构优化任务清单与首个基础设施重构落地**
+  - 新增 `docs/ARCHITECTURE_ISSUE_BACKLOG.md`，将架构优化方案拆解为可执行 Issue 清单，包含优先级、范围、验收标准与风险
+  - 新增 `data_provider/core/` 基础模块，抽离股票代码标准化与速率限制基础能力
+  - `data_provider/base.py` 保留兼容导出，现有调用方无需修改即可继续使用 `RateLimiter`、`normalize_stock_code`、`canonical_stock_code`
+  - 新增 `tests/test_data_provider_core.py`，补充基础能力回归测试
+- 🏗️ **批量获取逻辑从数据源管理器中抽离**
+  - 新增 `data_provider/core/batch_fetch.py`，承载批量并发获取与部分失败容忍逻辑
+  - `DataFetcherManager.batch_get_daily_data()` 调整为兼容 facade，现有调用方式保持不变
+  - 新增 `tests/test_batch_fetch_core.py`，覆盖代码标准化与部分成功返回场景
+- 🧭 **数据源路由与回退逻辑已抽离**
+  - 新增 `data_provider/core/provider_router.py`，承载日线数据的 provider 选择与 fallback 策略
+  - `DataFetcherManager.get_daily_data()` 调整为兼容 facade，现有调用方式保持不变
+  - `tests/test_data_provider_fallback.py` 新增美股直连 `YfinanceFetcher` 的回归覆盖
+- 🏗️ **搜索服务中的网页正文抓取逻辑已抽离**
+  - 新增 `src/search/content_fetcher.py`，承载网页正文提取能力
+  - `src/search_service.py` 保留 `fetch_url_content` 兼容调用入口，不影响现有搜索流程
+  - 新增 `tests/test_search_content_fetcher.py`，覆盖正文清洗与异常兜底场景
+- 🏗️ **搜索 Provider 适配器已迁入独立模块**
+  - 新增 `src/search/providers.py` 与 `src/search/types.py`
+  - `SearchService` 已切换到独立 Provider 与搜索结果类型实现
+  - 旧模块符号暂保留为兼容层，降低重构风险
+- 🧪 **新增分析响应与数据源故障切换回归测试**
+  - 新增 `tests/test_analysis_service_payload.py`，锁定 `AnalysisService` 输出结构
+  - 新增 `tests/test_data_provider_fallback.py`，覆盖数据源失败后切换到下一数据源的行为
+- 🪵 **分析链路关键日志已补充统一上下文**
+  - `utils/log_utils.py` 新增 `build_log_context()`，统一拼接 `query_id`、`stock_code`、`query_source`、`provider`、`cache_hit` 等上下文
+  - `src/services/analysis_service.py`、`src/services/task_queue.py`、`src/core/pipeline.py` 的关键入口日志已接入统一上下文
+  - 新增 `tests/test_log_utils.py` 覆盖上下文格式化行为
+- 🏷️ **回测引擎命名按职责澄清**
+  - `backtest/engine.py` 中的策略回测引擎已正式命名为 `StrategyBacktestEngine`
+  - `src/core/backtest_engine.py` 中的建议评估引擎已正式命名为 `AdviceEvaluationEngine`
+  - 保留 `BacktestEngine` 兼容别名，现有导入无需立即迁移
+- 🧩 **通知发送与渲染入口已抽出帮助层**
+  - 新增 `src/notification_transports.py`，统一通知渠道分发逻辑
+  - 新增 `src/notification_renderers.py`，承载日报与仪表盘渲染入口
+  - `NotificationService` 保持原接口不变，内部改为委托帮助层
+- 🗄️ **分析持久化职责已从 pipeline 中抽离**
+  - 新增 `src/core/analysis_persistence.py`，统一分析上下文、新闻情报与历史记录落库逻辑
+  - `StockAnalysisPipeline` 保持原接口不变，内部改为委托持久化服务
+  - 新增 `tests/test_analysis_persistence_service.py`，覆盖上下文快照与历史保存委托行为
+- 📰 **多维情报编排职责已从 pipeline 中抽离**
+  - 新增 `src/core/intel_coordinator.py`，统一搜索、格式化与新闻情报持久化流程
+  - `StockAnalysisPipeline` 保持原接口不变，内部改为委托情报编排器
+  - 新增 `tests/test_intel_coordinator.py`，覆盖综合情报与 Agent 最新新闻持久化流程
+- 📬 **分析结果交付职责已从 pipeline 中抽离**
+  - 新增 `src/core/analysis_delivery.py`，统一单股推送、汇总报告保存与多渠道发送流程
+  - `StockAnalysisPipeline` 保持原接口不变，内部改为委托交付服务
+  - 新增 `tests/test_analysis_delivery_service.py`，覆盖单股推送与汇总发送行为
+- 🧠 **分析引擎路由职责已从 pipeline 中抽离**
+  - 新增 `src/core/analysis_engine_router.py`，统一标准分析与 Agent 分析的选择逻辑
+  - `StockAnalysisPipeline.analyze_stock()` 保持原接口不变，内部改为委托引擎路由器
+  - 新增 `tests/test_analysis_engine_router.py`，覆盖显式 Agent 模式与技能触发模式判断
+- 🪶 **StockAnalysisPipeline 已收口为更薄的编排 facade**
+  - 干线职责已委托给 persistence / intel / delivery / engine router 四个协作组件
+  - 清理不再使用的上下文快照内部实现，dry-run 统计也改为委托持久化服务
+  - `StockAnalysisPipeline` 对外接口保持不变
+- 🤖 **LLM Provider 与结果解析职责已从 analyzer 中抽离**
+  - 新增 `src/llm/providers.py`，承载 Gemini / Anthropic / OpenAI 兼容 provider 初始化与切换逻辑
+  - 新增 `src/llm/result_parser.py`，承载 JSON 修复、结构化解析与纯文本降级解析
+  - `src/analyzer.py` 保持外部接口不变，内部改为委托 provider 与 parser 帮助模块
+  - 新增 `tests/test_llm_providers.py` 与 `tests/test_llm_result_parser.py`
+- 🗃️ **storage 领域边界已补出兼容导出层**
+  - 新增 `src/storage_models.py` 与 `src/storage_database.py`，显式提供 ORM 模型与数据库入口的兼容导出
+  - 为后续继续拆分 `src/storage.py` 提供稳定迁移落点
+- 🧱 **业务查询继续向 repository 收口**
+  - 新增 `src/repositories/news_repo.py`
+  - `AnalysisPersistenceService` 现已通过 `StockRepository`、`AnalysisRepository`、`NewsIntelRepository` 访问存储层，而不是直接依赖通用 `DatabaseManager`
+  - 新增 `tests/test_news_repository.py` 与 `tests/test_storage_exports.py`
+- ⚙️ **配置分组与 schema 导出能力已补齐**
+  - `Config` 新增 `grouped_fields()` 与 `export_schema()`
+  - 可为 CLI/API/Web 提供统一的分组配置元数据
+  - 新增 `tests/test_config_schema.py` 与 `tests/test_notification_helpers.py`
+- 🚀 **第二阶段专项优化：缓存策略与可观测性增强**
+  - 新增 `utils/observability.py`，提供统一操作耗时日志与内存指标聚合
+  - `StockAnalysisPipeline` 的 `fetch_and_save_stock_data` 与 `analyze_stock` 已接入统一耗时、状态与上下文打点
+  - `CacheManager` 新增 TTL 失效判定、命中/失效/写入统计与 `get_cache_stats()`
+  - `src/search/content_fetcher.py` 新增正文抓取内存缓存，减少重复网页抓取开销
+  - 新增 `/api/v1/system/metrics` 指标接口与 Web 运行指标页面
+  - 指标接口新增 provider 维度耗时摘要与 slow operations 列表，便于定位慢搜索源和慢链路
+  - 指标页新增手动刷新、自动刷新暂停和分缓存清理入口，运维排障更直接
+  - 缓存清理接口新增 namespace 校验与清理结果回传，便于前端同步最新缓存状态
+  - 指标接口与 Web 面板新增最近时间桶趋势数据，可直接观察关键操作最近几分钟的次数、成功率和耗时变化
+  - 搜索服务新增并发 in-flight 去重，同一查询在缓存未命中时会合并外部搜索请求，减少重复调用第三方搜索源
+  - 回测页新增 Agent 策略筛选与多选能力，后端支持按历史分析记录中的策略标识过滤回测结果与绩效统计
+  - Agent 分析历史会额外持久化 `selected_strategies`，便于后续按策略复盘
+  - 新增独立“策略信号回测”页与 `/api/v1/strategy-backtest/*` 接口，直接对技术规则生成信号并调用 `backtest/engine.py`
+  - 第一版已支持 `ma_golden_cross`、`volume_breakout`、`shrink_pullback`、`box_oscillation`、`bottom_volume`、`boll_kdj_combo`
+  - YAML 策略中暂未实现信号生成的项会在页面中明确标记为“待实现”，避免混淆提示词策略与量化信号策略
+  - 新增市场日线同步服务与 `/api/v1/system/market-sync/*` 接口，支持 A 股/美股分市场同步、自选股优先、已有历史时按最近几天增量补数
+  - 启用 `MARKET_SYNC_A_SHARE_FULL_ENABLED=true` 后，可在后台慢速回补 A 股全市场近一年数据；美股当前支持自选/配置股票池同步
+  - Web 路由改为懒加载拆包，显著降低主入口 chunk 体积
+  - 配置新增 `MARKET_DATA_CACHE_TTL`、`ARTICLE_CONTENT_CACHE_TTL`、`OBSERVABILITY_WARN_LATENCY_MS`
+  - 新增 `tests/test_cache_manager_optimization.py`、`tests/test_observability.py`、`tests/test_search_cache_store.py`、`tests/test_system_metrics_endpoint.py`
+
+### 新增（#minor）
+- 📊 **每日荐股功能**
+  - 多维度股票筛选：支持市值、成交额、换手率、价格、涨跌幅等条件筛选
+  - 智能过滤：自动排除 ST 股票、科创板、创业板（可配置）
+  - 龙虎榜集成：支持仅筛选龙虎榜股票
+  - 统计摘要：展示筛选结果的平均市值、平均成交额、平均换手率等统计信息
+  - API 接口：`POST /api/v1/screening/filter`
+  - Web 界面：新增「每日荐股」页面（/screening），提供可视化筛选条件和结果展示
+  - 新增文件：
+    - `src/services/screening_service.py`：选股服务层
+    - `api/v1/schemas/screening.py`：选股 API Schema
+    - `api/v1/endpoints/screening.py`：选股 API 端点
+    - `apps/dsa-web/src/api/screening.ts`：前端 API 模块
+    - `apps/dsa-web/src/pages/ScreeningPage.tsx`：荐股页面
+
 - 🎯 **AI 归因分析**
   - 分析股价变动的真实原因：业绩雷、减持公告、大盘回调、板块轮动等
   - 新闻事件智能分类：业绩公告、减持/增持、监管处罚、行业政策、市场情绪等

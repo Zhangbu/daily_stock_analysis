@@ -15,6 +15,7 @@ import uuid
 from typing import Optional, Dict, Any
 
 from src.repositories.analysis_repo import AnalysisRepository
+from utils.log_utils import build_log_context
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,9 @@ class AnalysisService:
                 query_id=query_id,
                 query_source="api"
             )
+
+            context = build_log_context(query_id=query_id, stock_code=stock_code, query_source="api")
+            logger.info(f"{context} 开始分析股票")
             
             # 确定报告类型
             rt = ReportType.FULL if report_type == "detailed" else ReportType.SIMPLE
@@ -86,14 +90,15 @@ class AnalysisService:
             )
             
             if result is None:
-                logger.warning(f"分析股票 {stock_code} 返回空结果")
+                logger.warning(f"{context} 分析返回空结果")
                 return None
             
             # 构建响应
             return self._build_analysis_response(result, query_id)
             
         except Exception as e:
-            logger.error(f"分析股票 {stock_code} 失败: {e}", exc_info=True)
+            context = build_log_context(query_id=query_id, stock_code=stock_code, query_source="api")
+            logger.error(f"{context} 分析失败: {e}", exc_info=True)
             return None
     
     def _build_analysis_response(

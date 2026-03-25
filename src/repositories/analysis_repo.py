@@ -13,6 +13,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
+from sqlalchemy import and_, desc, func, select
+
 from src.storage import DatabaseManager, AnalysisHistory
 
 logger = logging.getLogger(__name__)
@@ -84,7 +86,8 @@ class AnalysisRepository:
         query_id: str,
         report_type: str,
         news_content: Optional[str] = None,
-        context_snapshot: Optional[Dict[str, Any]] = None
+        context_snapshot: Optional[Dict[str, Any]] = None,
+        save_snapshot: bool = True,
     ) -> int:
         """
         保存分析结果
@@ -105,7 +108,8 @@ class AnalysisRepository:
                 query_id=query_id,
                 report_type=report_type,
                 news_content=news_content,
-                context_snapshot=context_snapshot
+                context_snapshot=context_snapshot,
+                save_snapshot=save_snapshot,
             )
         except Exception as e:
             logger.error(f"保存分析结果失败: {e}")
@@ -128,3 +132,44 @@ class AnalysisRepository:
         except Exception as e:
             logger.error(f"统计分析记录失败: {e}")
             return 0
+
+    def get_latest_by_codes(self, codes: List[str]) -> Dict[str, AnalysisHistory]:
+        """
+        Return latest analysis history for each code.
+
+        Args:
+            codes: Stock codes
+
+        Returns:
+            Mapping {code: latest AnalysisHistory}
+        """
+        normalized = [str(code).strip().upper() for code in codes if str(code).strip()]
+        if not normalized:
+            return {}
+
+        try:
+            with self.db.get_session() as session:
+                latest_times = (
+                    select(
+                        AnalysisHistory.code.label("code"),
+                        func.max(AnalysisHistory.created_at).label("latest_created_at"),
+                    )
+                    .where(AnalysisHistory.code.in_(normalized))
+                    .group_by(AnalysisHistory.code)
+                    .subquery()
+                )
+                rows = session.execute(
+                    select(AnalysisHistory)
+                    .join(
+                        latest_times,
+                        and_(
+                            AnalysisHistory.code == latest_times.c.code,
+                            AnalysisHistory.created_at == latest_times.c.latest_created_at,
+                        ),
+                    )
+                    .order_by(desc(AnalysisHistory.created_at))
+                ).scalars().all()
+                return {str(row.code).upper(): row for row in rows}
+        except Exception as e:
+            logger.error(f"批量获取最新分析记录失败: {e}")
+            return {}

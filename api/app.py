@@ -30,6 +30,8 @@ from api.v1 import api_v1_router
 from api.middlewares.auth import add_auth_middleware
 from api.middlewares.error_handler import add_error_handlers
 from api.v1.schemas.common import HealthResponse
+from src.config import get_config
+from src.services.market_data_sync_service import MarketDataSyncService
 from src.services.system_config_service import SystemConfigService
 
 
@@ -37,11 +39,17 @@ from src.services.system_config_service import SystemConfigService
 async def app_lifespan(app: FastAPI):
     """Initialize and release shared services for the app lifecycle."""
     app.state.system_config_service = SystemConfigService()
+    app.state.market_data_sync_service = MarketDataSyncService()
+    config = get_config()
+    if config.market_sync_enabled and config.market_sync_on_startup:
+        app.state.market_data_sync_service.start_background_sync()
     try:
         yield
     finally:
         if hasattr(app.state, "system_config_service"):
             delattr(app.state, "system_config_service")
+        if hasattr(app.state, "market_data_sync_service"):
+            delattr(app.state, "market_data_sync_service")
 
 
 def create_app(static_dir: Optional[Path] = None) -> FastAPI:

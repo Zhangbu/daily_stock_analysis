@@ -13,9 +13,9 @@ A股自选股智能分析系统 - 配置管理模块
 import os
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv, dotenv_values
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 
 def setup_env(override: bool = False):
@@ -50,6 +50,7 @@ class Config:
     
     # === 自选股配置 ===
     stock_list: List[str] = field(default_factory=list)
+    us_stock_list: List[str] = field(default_factory=list)
 
     # === 飞书云文档配置 ===
     feishu_app_id: Optional[str] = None
@@ -237,8 +238,22 @@ class Config:
     realtime_source_priority: str = "tencent,akshare_sina,efinance,akshare_em"
     # 实时行情缓存时间（秒）
     realtime_cache_ttl: int = 600
+    # Historical market data cache TTL on disk (seconds, 0 disables file-age check)
+    market_data_cache_ttl: int = 21600
+    market_sync_enabled: bool = False
+    market_sync_on_startup: bool = False
+    market_sync_markets: List[str] = field(default_factory=lambda: ["cn"])
+    market_sync_a_share_full_enabled: bool = False
+    market_sync_historical_days: int = 365
+    market_sync_incremental_days: int = 5
+    market_sync_sleep_seconds: float = 2.0
+    market_sync_max_codes_per_run: int = 0
+    # Extracted article content in-memory cache TTL (seconds)
+    article_content_cache_ttl: int = 1800
     # 熔断器冷却时间（秒）
     circuit_breaker_cooldown: int = 300
+    # Warn threshold for slow operations in logs
+    observability_warn_latency_ms: int = 2000
 
     # Discord 机器人状态
     discord_bot_status: str = "A股智能分析 | /help"
@@ -399,6 +414,11 @@ class Config:
         
         return cls(
             stock_list=stock_list,
+            us_stock_list=[
+                (c or "").strip().upper()
+                for c in os.getenv('US_STOCK_LIST', '').split(',')
+                if (c or "").strip()
+            ],
             feishu_app_id=os.getenv('FEISHU_APP_ID'),
             feishu_app_secret=os.getenv('FEISHU_APP_SECRET'),
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),
@@ -548,7 +568,22 @@ class Config:
             # - tushare: Tushare Pro，需要2000积分，数据全面
             realtime_source_priority=cls._resolve_realtime_source_priority(),
             realtime_cache_ttl=int(os.getenv('REALTIME_CACHE_TTL', '600')),
-            circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300'))
+            market_data_cache_ttl=int(os.getenv('MARKET_DATA_CACHE_TTL', '21600')),
+            market_sync_enabled=os.getenv('MARKET_SYNC_ENABLED', 'false').lower() == 'true',
+            market_sync_on_startup=os.getenv('MARKET_SYNC_ON_STARTUP', 'false').lower() == 'true',
+            market_sync_markets=[
+                m.strip().lower()
+                for m in os.getenv('MARKET_SYNC_MARKETS', 'cn').split(',')
+                if m.strip().lower() in {'cn', 'us'}
+            ] or ['cn'],
+            market_sync_a_share_full_enabled=os.getenv('MARKET_SYNC_A_SHARE_FULL_ENABLED', 'false').lower() == 'true',
+            market_sync_historical_days=int(os.getenv('MARKET_SYNC_HISTORICAL_DAYS', '365')),
+            market_sync_incremental_days=max(1, int(os.getenv('MARKET_SYNC_INCREMENTAL_DAYS', '5'))),
+            market_sync_sleep_seconds=max(0.0, float(os.getenv('MARKET_SYNC_SLEEP_SECONDS', '2.0'))),
+            market_sync_max_codes_per_run=max(0, int(os.getenv('MARKET_SYNC_MAX_CODES_PER_RUN', '0'))),
+            article_content_cache_ttl=int(os.getenv('ARTICLE_CONTENT_CACHE_TTL', '1800')),
+            circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300')),
+            observability_warn_latency_ms=int(os.getenv('OBSERVABILITY_WARN_LATENCY_MS', '2000')),
         )
     
     @classmethod
@@ -657,6 +692,11 @@ class Config:
             stock_list = ['000001']
 
         self.stock_list = stock_list
+        self.us_stock_list = [
+            (c or "").strip().upper()
+            for c in os.getenv('US_STOCK_LIST', '').split(',')
+            if (c or "").strip()
+        ]
     
     def validate(self) -> List[str]:
         """
@@ -698,6 +738,66 @@ class Config:
             warnings.append("提示：未配置通知渠道，将不发送推送通知")
         
         return warnings
+
+    def grouped_fields(self) -> Dict[str, List[str]]:
+        """Return config fields grouped by responsibility."""
+        return {
+            "stocks": ["stock_list", "us_stock_list"],
+            "ai": [
+                "gemini_api_key", "gemini_model", "gemini_model_fallback", "gemini_temperature",
+                "anthropic_api_key", "anthropic_model", "anthropic_temperature", "anthropic_max_tokens",
+                "openai_api_key", "openai_base_url", "openai_model", "openai_vision_model", "openai_temperature",
+            ],
+            "search": ["bocha_api_keys", "tavily_api_keys", "brave_api_keys", "serpapi_keys", "news_max_age_days"],
+            "agent": ["agent_mode", "agent_max_steps", "agent_skills", "agent_strategy_dir"],
+            "notification": [
+                "wechat_webhook_url", "feishu_webhook_url", "telegram_bot_token", "telegram_chat_id",
+                "telegram_message_thread_id", "email_sender", "email_sender_name", "email_receivers",
+                "pushover_user_key", "pushover_api_token", "pushplus_token", "pushplus_topic",
+                "serverchan3_sendkey", "custom_webhook_urls", "custom_webhook_bearer_token",
+                "discord_bot_token", "discord_main_channel_id", "discord_webhook_url",
+                "astrbot_token", "astrbot_url", "single_stock_notify", "report_type",
+                "report_summary_only", "analysis_delay", "merge_email_notification",
+            ],
+            "runtime": [
+                "database_path", "save_context_snapshot", "backtest_enabled", "backtest_eval_window_days",
+                "backtest_min_age_days", "backtest_engine_version", "backtest_neutral_band_pct",
+                "log_dir", "log_level", "max_workers", "debug", "http_proxy", "https_proxy",
+                "historical_data_days", "trend_analysis_window", "max_historical_days",
+                "schedule_enabled", "schedule_time", "schedule_run_immediately", "run_immediately",
+                "market_review_enabled", "market_review_region", "trading_day_check_enabled",
+                "enable_realtime_quote", "enable_realtime_technical_indicators", "enable_chip_distribution",
+                "enable_eastmoney_patch", "realtime_source_priority", "realtime_cache_ttl",
+                "market_data_cache_ttl", "market_sync_enabled", "market_sync_on_startup",
+                "market_sync_markets", "market_sync_a_share_full_enabled", "market_sync_historical_days",
+                "market_sync_incremental_days", "market_sync_sleep_seconds", "market_sync_max_codes_per_run",
+                "article_content_cache_ttl", "observability_warn_latency_ms",
+                "circuit_breaker_cooldown", "max_retries", "retry_base_delay", "retry_max_delay",
+                "webui_enabled",
+            ],
+        }
+
+    def export_schema(self) -> Dict[str, Any]:
+        """Export grouped config metadata for CLI/API/Web usage."""
+        field_map = {f.name: f for f in fields(self)}
+        grouped = self.grouped_fields()
+        schema: Dict[str, Any] = {"groups": {}, "warnings": self.validate()}
+        for group_name, names in grouped.items():
+            group_items = []
+            for name in names:
+                if name not in field_map:
+                    continue
+                value = getattr(self, name)
+                group_items.append(
+                    {
+                        "name": name,
+                        "type": field_map[name].type.__class__.__name__ if hasattr(field_map[name].type, "__class__") else str(field_map[name].type),
+                        "value": value,
+                        "is_secret": any(token in name for token in ("key", "token", "password", "secret")),
+                    }
+                )
+            schema["groups"][group_name] = group_items
+        return schema
     
     def get_db_url(self) -> str:
         """

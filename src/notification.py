@@ -41,6 +41,8 @@ except ImportError:
 from src.config import get_config
 from src.analyzer import AnalysisResult
 from src.formatters import format_feishu_markdown, markdown_to_html_document, chunk_content_by_max_words
+from src.notification_renderers import render_dashboard_report, render_daily_report
+from src.notification_transports import dispatch_notification_channel
 from bot.models import BotMessage
 
 logger = logging.getLogger(__name__)
@@ -406,6 +408,13 @@ class NotificationService:
         results: List[AnalysisResult],
         report_date: Optional[str] = None
     ) -> str:
+        return render_daily_report(self, results, report_date=report_date)
+
+    def _generate_daily_report_impl(
+        self,
+        results: List[AnalysisResult],
+        report_date: Optional[str] = None
+    ) -> str:
         """
         生成 Markdown 格式的日报（详细版）
 
@@ -673,6 +682,13 @@ class NotificationService:
             return ('观望', '⚪', '观望')
     
     def generate_dashboard_report(
+        self,
+        results: List[AnalysisResult],
+        report_date: Optional[str] = None
+    ) -> str:
+        return render_dashboard_report(self, results, report_date=report_date)
+
+    def _generate_dashboard_report_impl(
         self,
         results: List[AnalysisResult],
         report_date: Optional[str] = None
@@ -3267,52 +3283,15 @@ class NotificationService:
 
         for channel in self._available_channels:
             channel_name = ChannelDetector.get_channel_name(channel)
-            use_image = self._should_use_image_for_channel(channel, image_bytes)
             try:
-                if channel == NotificationChannel.WECHAT:
-                    if use_image:
-                        result = self._send_wechat_image(image_bytes)
-                    else:
-                        result = self.send_to_wechat(content)
-                elif channel == NotificationChannel.FEISHU:
-                    result = self.send_to_feishu(content)
-                elif channel == NotificationChannel.TELEGRAM:
-                    if use_image:
-                        result = self._send_telegram_photo(image_bytes)
-                    else:
-                        result = self.send_to_telegram(content)
-                elif channel == NotificationChannel.EMAIL:
-                    receivers = None
-                    if email_send_to_all and self._stock_email_groups:
-                        receivers = self.get_all_email_receivers()
-                    elif email_stock_codes and self._stock_email_groups:
-                        receivers = self.get_receivers_for_stocks(email_stock_codes)
-                    if use_image:
-                        result = self._send_email_with_inline_image(
-                            image_bytes, receivers=receivers
-                        )
-                    else:
-                        result = self.send_to_email(content, receivers=receivers)
-                elif channel == NotificationChannel.PUSHOVER:
-                    result = self.send_to_pushover(content)
-                elif channel == NotificationChannel.PUSHPLUS:
-                    result = self.send_to_pushplus(content)
-                elif channel == NotificationChannel.SERVERCHAN3:
-                    result = self.send_to_serverchan3(content)
-                elif channel == NotificationChannel.CUSTOM:
-                    if use_image:
-                        result = self._send_custom_webhook_image(
-                            image_bytes, fallback_content=content
-                        )
-                    else:
-                        result = self.send_to_custom(content)
-                elif channel == NotificationChannel.DISCORD:
-                    result = self.send_to_discord(content)
-                elif channel == NotificationChannel.ASTRBOT:
-                    result = self.send_to_astrbot(content)
-                else:
-                    logger.warning(f"不支持的通知渠道: {channel}")
-                    result = False
+                result = dispatch_notification_channel(
+                    self,
+                    channel=channel,
+                    content=content,
+                    image_bytes=image_bytes,
+                    email_stock_codes=email_stock_codes,
+                    email_send_to_all=email_send_to_all,
+                )
 
                 if result:
                     success_count += 1

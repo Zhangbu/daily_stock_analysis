@@ -1,13 +1,18 @@
 import type React from 'react';
+import { Suspense, lazy } from 'react';
 import {BrowserRouter as Router, Routes, Route, NavLink, useLocation, Navigate} from 'react-router-dom';
-import HomePage from './pages/HomePage';
-import BacktestPage from './pages/BacktestPage';
-import SettingsPage from './pages/SettingsPage';
-import LoginPage from './pages/LoginPage';
-import NotFoundPage from './pages/NotFoundPage';
-import ChatPage from './pages/ChatPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import './App.css';
+
+const HomePage = lazy(() => import('./pages/HomePage'));
+const BacktestPage = lazy(() => import('./pages/BacktestPage'));
+const StrategyBacktestPage = lazy(() => import('./pages/StrategyBacktestPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));
+const ChatPage = lazy(() => import('./pages/ChatPage'));
+const ScreeningPage = lazy(() => import('./pages/ScreeningPage'));
+const MetricsPage = lazy(() => import('./pages/MetricsPage'));
 
 // 侧边导航图标
 const HomeIcon: React.FC<{ active?: boolean }> = ({active}) => (
@@ -24,6 +29,13 @@ const BacktestIcon: React.FC<{ active?: boolean }> = ({active}) => (
     </svg>
 );
 
+const StrategySignalIcon: React.FC<{ active?: boolean }> = ({active}) => (
+    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={active ? 2 : 1.5}
+              d="M4 19h16M6 16l4-4 3 3 5-7"/>
+    </svg>
+);
+
 const SettingsIcon: React.FC<{ active?: boolean }> = ({active}) => (
     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
@@ -36,6 +48,20 @@ const ChatIcon: React.FC<{ active?: boolean }> = ({active}) => (
     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={active ? 2 : 1.5}
               d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+    </svg>
+);
+
+const ScreeningIcon: React.FC<{ active?: boolean }> = ({active}) => (
+    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={active ? 2 : 1.5}
+              d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+    </svg>
+);
+
+const MetricsIcon: React.FC<{ active?: boolean }> = ({active}) => (
+    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={active ? 2 : 1.5}
+              d="M4 19h16M7 16V8m5 8V5m5 11v-6"/>
     </svg>
 );
 
@@ -67,10 +93,28 @@ const NAV_ITEMS: DockItem[] = [
         icon: ChatIcon,
     },
     {
+        key: 'screening',
+        label: '市场筛选',
+        to: '/screening',
+        icon: ScreeningIcon,
+    },
+    {
         key: 'backtest',
         label: '回测',
         to: '/backtest',
         icon: BacktestIcon,
+    },
+    {
+        key: 'strategy-backtest',
+        label: '策略测',
+        to: '/strategy-backtest',
+        icon: StrategySignalIcon,
+    },
+    {
+        key: 'metrics',
+        label: '指标',
+        to: '/metrics',
+        icon: MetricsIcon,
     },
     {
         key: 'settings',
@@ -172,14 +216,25 @@ const AppContent: React.FC = () => {
         <div className="flex min-h-screen bg-base">
             <DockNav/>
             <main className="flex-1 dock-safe-area">
-                <Routes>
-                    <Route path="/" element={<HomePage/>}/>
-                    <Route path="/chat" element={<ChatPage/>}/>
-                    <Route path="/backtest" element={<BacktestPage/>}/>
-                    <Route path="/settings" element={<SettingsPage/>}/>
-                    <Route path="/login" element={<LoginPage/>}/>
-                    <Route path="*" element={<NotFoundPage/>}/>
-                </Routes>
+                <Suspense
+                    fallback={
+                        <div className="flex min-h-screen items-center justify-center bg-base">
+                            <div className="w-8 h-8 border-2 border-cyan/20 border-t-cyan rounded-full animate-spin" />
+                        </div>
+                    }
+                >
+                    <Routes>
+                        <Route path="/" element={<HomePage/>}/>
+                        <Route path="/chat" element={<ChatPage/>}/>
+                        <Route path="/screening" element={<ScreeningPage/>}/>
+                        <Route path="/backtest" element={<BacktestPage/>}/>
+                        <Route path="/strategy-backtest" element={<StrategyBacktestPage/>}/>
+                        <Route path="/metrics" element={<MetricsPage/>}/>
+                        <Route path="/settings" element={<SettingsPage/>}/>
+                        <Route path="/login" element={<LoginPage/>}/>
+                        <Route path="*" element={<NotFoundPage/>}/>
+                    </Routes>
+                </Suspense>
             </main>
         </div>
     );

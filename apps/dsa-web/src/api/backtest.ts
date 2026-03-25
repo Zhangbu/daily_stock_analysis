@@ -17,6 +17,7 @@ export const backtestApi = {
   run: async (params: BacktestRunRequest = {}): Promise<BacktestRunResponse> => {
     const requestData: Record<string, unknown> = {};
     if (params.code) requestData.code = params.code;
+    if (params.strategyIds?.length) requestData.strategy_ids = params.strategyIds;
     if (params.force) requestData.force = params.force;
     if (params.evalWindowDays) requestData.eval_window_days = params.evalWindowDays;
     if (params.minAgeDays != null) requestData.min_age_days = params.minAgeDays;
@@ -34,14 +35,16 @@ export const backtestApi = {
    */
   getResults: async (params: {
     code?: string;
+    strategyIds?: string[];
     evalWindowDays?: number;
     page?: number;
     limit?: number;
   } = {}): Promise<BacktestResultsResponse> => {
-    const { code, evalWindowDays, page = 1, limit = 20 } = params;
+    const { code, strategyIds, evalWindowDays, page = 1, limit = 20 } = params;
 
     const queryParams: Record<string, string | number> = { page, limit };
     if (code) queryParams.code = code;
+    if (strategyIds?.length) queryParams.strategy_ids = strategyIds.join(',');
     if (evalWindowDays) queryParams.eval_window_days = evalWindowDays;
 
     const response = await apiClient.get<Record<string, unknown>>(
@@ -61,10 +64,11 @@ export const backtestApi = {
   /**
    * Get overall performance metrics
    */
-  getOverallPerformance: async (evalWindowDays?: number): Promise<PerformanceMetrics | null> => {
+  getOverallPerformance: async (evalWindowDays?: number, strategyIds?: string[]): Promise<PerformanceMetrics | null> => {
     try {
-      const params: Record<string, number> = {};
+      const params: Record<string, number | string> = {};
       if (evalWindowDays) params.eval_window_days = evalWindowDays;
+      if (strategyIds?.length) params.strategy_ids = strategyIds.join(',');
       const response = await apiClient.get<Record<string, unknown>>(
         '/api/v1/backtest/performance',
         { params },
@@ -82,10 +86,11 @@ export const backtestApi = {
   /**
    * Get per-stock performance metrics
    */
-  getStockPerformance: async (code: string, evalWindowDays?: number): Promise<PerformanceMetrics | null> => {
+  getStockPerformance: async (code: string, evalWindowDays?: number, strategyIds?: string[]): Promise<PerformanceMetrics | null> => {
     try {
-      const params: Record<string, number> = {};
+      const params: Record<string, number | string> = {};
       if (evalWindowDays) params.eval_window_days = evalWindowDays;
+      if (strategyIds?.length) params.strategy_ids = strategyIds.join(',');
       const response = await apiClient.get<Record<string, unknown>>(
         `/api/v1/backtest/performance/${encodeURIComponent(code)}`,
         { params },

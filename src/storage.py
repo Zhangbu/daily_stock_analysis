@@ -378,6 +378,21 @@ class ConversationMessage(Base):
     created_at = Column(DateTime, default=datetime.now, index=True)
 
 
+class ScreeningSnapshot(Base):
+    """Persist one screening candidate pool snapshot."""
+
+    __tablename__ = 'screening_snapshots'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id = Column(String(64), nullable=False, unique=True, index=True)
+    market = Column(String(8), nullable=False, index=True)
+    data_mode = Column(String(16), nullable=False, index=True)
+    filters_json = Column(Text)
+    summary_json = Column(Text)
+    candidates_json = Column(Text)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
 class DatabaseManager:
     """
     数据库管理器 - 单例模式
@@ -779,6 +794,46 @@ class DatabaseManager:
                 session.rollback()
                 logger.error(f"保存分析历史失败: {e}")
                 return 0
+
+    def save_screening_snapshot(
+        self,
+        *,
+        snapshot_id: str,
+        market: str,
+        data_mode: str,
+        filters: Dict[str, Any],
+        summary: Dict[str, Any],
+        candidates: List[Dict[str, Any]],
+    ) -> int:
+        """Save one screening snapshot."""
+        record = ScreeningSnapshot(
+            snapshot_id=snapshot_id,
+            market=market,
+            data_mode=data_mode,
+            filters_json=self._safe_json_dumps(filters),
+            summary_json=self._safe_json_dumps(summary),
+            candidates_json=self._safe_json_dumps(candidates),
+            created_at=datetime.now(),
+        )
+        with self.get_session() as session:
+            try:
+                session.add(record)
+                session.commit()
+                return record.id
+            except Exception as exc:
+                session.rollback()
+                logger.error("保存候选池快照失败: %s", exc)
+                return 0
+
+    def get_recent_screening_snapshots(self, limit: int = 20) -> List[ScreeningSnapshot]:
+        """Return recent screening snapshots."""
+        with self.get_session() as session:
+            results = session.execute(
+                select(ScreeningSnapshot)
+                .order_by(desc(ScreeningSnapshot.created_at))
+                .limit(limit)
+            ).scalars().all()
+            return list(results)
 
     def get_analysis_history(
         self,

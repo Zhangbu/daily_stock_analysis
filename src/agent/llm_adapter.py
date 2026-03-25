@@ -18,6 +18,47 @@ from src.config import get_config
 
 logger = logging.getLogger(__name__)
 
+_ASCII_UNSAFE_TABLE_CHARS = {
+    0x2502: "|",  # │
+    0x2503: "|",  # ┃
+    0x2506: "|",  # ┆
+    0x2507: "|",  # ┇
+    0x250A: "|",  # ┊
+    0x250B: "|",  # ┋
+    0x254E: "|",  # ╎
+    0x254F: "|",  # ╏
+    0x2500: "-",  # ─
+    0x2501: "-",  # ━
+    0x2504: "-",  # ┄
+    0x2505: "-",  # ┅
+    0x2508: "-",  # ┈
+    0x2509: "-",  # ┉
+    0x2550: "=",  # ═
+    0x256A: "+",  # ╪
+    0x256B: "+",  # ╫
+    0x256C: "+",  # ╬
+    0x253C: "+",  # ┼
+    0x256D: "+",  # ╭
+    0x256E: "+",  # ╮
+    0x256F: "+",  # ╯
+    0x2570: "+",  # ╰
+    0x250C: "+",  # ┌
+    0x2510: "+",  # ┐
+    0x2514: "+",  # └
+    0x2518: "+",  # ┘
+}
+
+
+def _normalize_ascii_unsafe_for_openai(value: Any) -> Any:
+    """Recursively normalize box-drawing chars that can break strict ASCII encoders."""
+    if isinstance(value, str):
+        return value.translate(_ASCII_UNSAFE_TABLE_CHARS)
+    if isinstance(value, list):
+        return [_normalize_ascii_unsafe_for_openai(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _normalize_ascii_unsafe_for_openai(v) for k, v in value.items()}
+    return value
+
 
 # ============================================================
 # Unified response types
@@ -414,6 +455,7 @@ class LLMToolAdapter:
                 })
 
         model_name = config.openai_model or "gpt-4o-mini"
+        openai_messages = _normalize_ascii_unsafe_for_openai(openai_messages)
         call_kwargs = {
             "model": model_name,
             "messages": openai_messages,

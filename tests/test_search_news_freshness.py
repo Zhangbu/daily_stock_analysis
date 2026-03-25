@@ -4,6 +4,8 @@ Unit tests for search_stock_news and search_comprehensive_intel news_max_age_day
 """
 
 import sys
+import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +17,7 @@ if "newspaper" not in sys.modules:
     sys.modules["newspaper"] = mock_np
 
 from src.search_service import SearchResponse, SearchResult, SearchService
+from src.search.cache_store import search_cache_store
 
 
 def _fake_search_response() -> SearchResponse:
@@ -37,6 +40,9 @@ def _fake_search_response() -> SearchResponse:
 
 class SearchNewsFreshnessTestCase(unittest.TestCase):
     """Tests for news_max_age_days in search_stock_news and search_comprehensive_intel."""
+
+    def tearDown(self) -> None:
+        search_cache_store.clear()
 
     def _create_service_with_mock_provider(self, news_max_age_days: int = 3):
         """Create SearchService with a mock provider that records search() calls."""
@@ -121,3 +127,36 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
                 2,
                 msg=f"Expected days=2, got {call_kwargs.get('days')}",
             )
+
+    def test_search_stock_news_deduplicates_inflight_requests(self) -> None:
+        """Concurrent identical news lookups should share one provider call."""
+        service, mock_search = self._create_service_with_mock_provider(news_max_age_days=3)
+        results = []
+        errors = []
+        start_event = threading.Event()
+
+        def delayed_search(*args, **kwargs):
+            time.sleep(0.05)
+            return _fake_search_response()
+
+        mock_search.side_effect = delayed_search
+
+        def worker() -> None:
+            try:
+                start_event.wait(timeout=1)
+                results.append(service.search_stock_news("600519", "贵州茅台"))
+            except Exception as exc:  # pragma: no cover - defensive collection for assertions
+                errors.append(exc)
+
+        thread1 = threading.Thread(target=worker)
+        thread2 = threading.Thread(target=worker)
+        thread1.start()
+        thread2.start()
+        start_event.set()
+        thread1.join()
+        thread2.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertEqual(mock_search.call_count, 1)
+        self.assertTrue(all(result.success for result in results))

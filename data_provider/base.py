@@ -16,7 +16,6 @@
 
 import logging
 import random
-import threading
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -31,230 +30,18 @@ from tenacity import (
     retry_if_exception_type,
 )
 
+from .cache_manager import CacheManager
+from .core.batch_fetch import batch_get_daily_data as batch_get_daily_data_helper
+from .core.code_normalization import canonical_stock_code, normalize_stock_code
+from .core.provider_router import route_daily_data
+from .core.rate_limit import RateLimiter
+
 # 配置日志
 logger = logging.getLogger(__name__)
 
 
 # === 标准化列名定义 ===
 STANDARD_COLUMNS = ['date', 'open', 'high', 'low', 'close', 'volume', 'amount', 'pct_chg']
-
-
-# === 速率限制器 ===
-class RateLimiter:
-    """
-    Unified API request rate limiter using token bucket algorithm.
-
-    Features:
-    - Thread-safe implementation
-    - Configurable calls per minute and minimum interval
-    - Supports burst requests up to bucket capacity
-    - Automatic token replenishment
-
-    Usage:
-        limiter = RateLimiter(calls_per_minute=60, min_interval=0.5)
-        limiter.acquire()  # Block until a token is available
-        # ... make API request ...
-    """
-
-    def __init__(
-        self,
-        calls_per_minute: int = 60,
-        min_interval: float = 0.0,
-        name: str = "RateLimiter"
-    ):
-        """
-        Initialize the rate limiter.
-
-        Args:
-            calls_per_minute: Maximum calls allowed per minute (default: 60)
-            min_interval: Minimum interval between calls in seconds (default: 0.0)
-            name: Name for logging purposes
-        """
-        self.calls_per_minute = calls_per_minute
-        self.min_interval = min_interval
-        self.name = name
-
-        # Token bucket parameters
-        self._tokens = float(calls_per_minute)  # Start with full bucket
-        self._max_tokens = float(calls_per_minute)
-        self._refill_rate = calls_per_minute / 60.0  # Tokens per second
-
-        # Timing tracking
-        self._last_refill_time = time.time()
-        self._last_request_time: Optional[float] = None
-
-        # Thread lock for safety
-        self._lock = threading.Lock()
-
-        logger.debug(
-            f"[{self.name}] Initialized: {calls_per_minute} calls/min, "
-            f"min_interval={min_interval}s"
-        )
-
-    def _refill_tokens(self) -> None:
-        """Refill tokens based on elapsed time."""
-        now = time.time()
-        elapsed = now - self._last_refill_time
-
-        if elapsed > 0:
-            new_tokens = elapsed * self._refill_rate
-            self._tokens = min(self._max_tokens, self._tokens + new_tokens)
-            self._last_refill_time = now
-
-    def acquire(self, timeout: Optional[float] = None) -> bool:
-        """
-        Acquire permission to make a request.
-
-        This method will block until:
-        1. A token is available (rate limit not exceeded)
-        2. Minimum interval has passed since last request
-
-        Args:
-            timeout: Maximum time to wait in seconds (None = wait forever)
-
-        Returns:
-            True if acquired, False if timeout exceeded
-        """
-        start_time = time.time()
-
-        while True:
-            with self._lock:
-                # Refill tokens
-                self._refill_tokens()
-
-                now = time.time()
-
-                # Check minimum interval
-                if self._last_request_time is not None and self.min_interval > 0:
-                    time_since_last = now - self._last_request_time
-                    if time_since_last < self.min_interval:
-                        wait_time = self.min_interval - time_since_last
-                        logger.debug(
-                            f"[{self.name}] Min interval not met, "
-                            f"waiting {wait_time:.2f}s"
-                        )
-                    else:
-                        wait_time = 0
-                else:
-                    wait_time = 0
-
-                # Check if we have tokens
-                if self._tokens >= 1.0:
-                    self._tokens -= 1.0
-                    self._last_request_time = now
-                    logger.debug(
-                        f"[{self.name}] Token acquired, "
-                        f"remaining: {self._tokens:.1f}/{self._max_tokens:.0f}"
-                    )
-                    return True
-
-                # Calculate wait time for token refill
-                tokens_needed = 1.0 - self._tokens
-                refill_wait = tokens_needed / self._refill_rate
-                total_wait = max(wait_time, refill_wait)
-
-                # Check timeout
-                if timeout is not None:
-                    elapsed = now - start_time
-                    if elapsed + total_wait > timeout:
-                        return False
-
-                logger.debug(
-                    f"[{self.name}] Rate limit reached, "
-                    f"waiting {total_wait:.2f}s for token refill"
-                )
-
-            # Sleep outside the lock
-            time.sleep(total_wait)
-
-    def try_acquire(self) -> bool:
-        """
-        Try to acquire without blocking.
-
-        Returns:
-            True if acquired, False if would need to wait
-        """
-        with self._lock:
-            self._refill_tokens()
-
-            now = time.time()
-
-            # Check minimum interval
-            if self._last_request_time is not None and self.min_interval > 0:
-                if now - self._last_request_time < self.min_interval:
-                    return False
-
-            if self._tokens >= 1.0:
-                self._tokens -= 1.0
-                self._last_request_time = now
-                return True
-
-            return False
-
-    def get_status(self) -> Dict[str, Any]:
-        """Get current rate limiter status."""
-        with self._lock:
-            self._refill_tokens()
-            return {
-                'name': self.name,
-                'tokens_available': round(self._tokens, 2),
-                'max_tokens': self._max_tokens,
-                'calls_per_minute': self.calls_per_minute,
-                'min_interval': self.min_interval,
-            }
-
-
-def normalize_stock_code(stock_code: str) -> str:
-    """
-    Normalize stock code by stripping exchange prefixes/suffixes.
-
-    Accepted formats and their normalized results:
-    - '600519'      -> '600519'   (already clean)
-    - 'SH600519'    -> '600519'   (strip SH prefix)
-    - 'SZ000001'    -> '000001'   (strip SZ prefix)
-    - 'sh600519'    -> '600519'   (case-insensitive)
-    - '600519.SH'   -> '600519'   (strip .SH suffix)
-    - '000001.SZ'   -> '000001'   (strip .SZ suffix)
-    - 'HK00700'     -> 'HK00700'  (keep HK prefix for HK stocks)
-    - 'AAPL'        -> 'AAPL'     (keep US stock ticker as-is)
-
-    This function is applied at the DataProviderManager layer so that
-    all individual fetchers receive a clean 6-digit code (for A-shares/ETFs).
-    """
-    code = stock_code.strip()
-    upper = code.upper()
-
-    # Strip SH/SZ prefix (e.g. SH600519 -> 600519)
-    if upper.startswith(('SH', 'SZ')) and not upper.startswith('SH.') and not upper.startswith('SZ.'):
-        candidate = code[2:]
-        # Only strip if the remainder looks like a valid numeric code
-        if candidate.isdigit() and len(candidate) in (5, 6):
-            return candidate
-
-    # Strip .SH/.SZ suffix (e.g. 600519.SH -> 600519)
-    if '.' in code:
-        base, suffix = code.rsplit('.', 1)
-        if suffix.upper() in ('SH', 'SZ', 'SS') and base.isdigit():
-            return base
-
-    return code
-
-
-def canonical_stock_code(code: str) -> str:
-    """
-    Return the canonical (uppercase) form of a stock code.
-
-    This is a display/storage layer concern, distinct from normalize_stock_code
-    which strips exchange prefixes. Apply at system input boundaries to ensure
-    consistent case across BOT, WEB UI, API, and CLI paths (Issue #355).
-
-    Examples:
-        'aapl'    -> 'AAPL'
-        'AAPL'    -> 'AAPL'
-        '600519'  -> '600519'  (digits are unchanged)
-        'hk00700' -> 'HK00700'
-    """
-    return (code or "").strip().upper()
 
 
 class DataFetchError(Exception):
@@ -280,6 +67,7 @@ class BaseFetcher(ABC):
     1. 定义统一的数据获取接口
     2. 提供数据标准化方法
     3. 实现通用的技术指标计算
+    4. 集成智能缓存管理
     
     子类实现：
     - _fetch_raw_data(): 从具体数据源获取原始数据
@@ -288,6 +76,12 @@ class BaseFetcher(ABC):
     
     name: str = "BaseFetcher"
     priority: int = 99  # 优先级数字越小越优先
+    
+    def __init__(self):
+        """Initialize fetcher with cache manager."""
+        from src.config import get_config
+
+        self.cache_manager = CacheManager(ttl_seconds=get_config().market_data_cache_ttl)
     
     @abstractmethod
     def _fetch_raw_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -604,63 +398,14 @@ class DataFetcherManager:
         Raises:
             DataFetchError: 所有数据源都失败时抛出
         """
-        from .us_index_mapping import is_us_index_code, is_us_stock_code
-
-        # Normalize code (strip SH/SZ prefix etc.)
-        stock_code = normalize_stock_code(stock_code)
-
-        errors = []
-
-        # 快速路径：美股指数与美股股票直接路由到 YfinanceFetcher
-        if is_us_index_code(stock_code) or is_us_stock_code(stock_code):
-            for fetcher in self._fetchers:
-                if fetcher.name == "YfinanceFetcher":
-                    try:
-                        logger.info(f"[{fetcher.name}] 美股/美股指数 {stock_code} 直接路由...")
-                        df = fetcher.get_daily_data(
-                            stock_code=stock_code,
-                            start_date=start_date,
-                            end_date=end_date,
-                            days=days,
-                        )
-                        if df is not None and not df.empty:
-                            logger.info(f"[{fetcher.name}] 成功获取 {stock_code}")
-                            return df, fetcher.name
-                    except Exception as e:
-                        error_msg = f"[{fetcher.name}] 失败: {str(e)}"
-                        logger.warning(error_msg)
-                        errors.append(error_msg)
-                    break
-            # YfinanceFetcher failed or not found
-            error_summary = f"美股/美股指数 {stock_code} 获取失败:\n" + "\n".join(errors)
-            logger.error(error_summary)
-            raise DataFetchError(error_summary)
-
-        for fetcher in self._fetchers:
-            try:
-                logger.info(f"尝试使用 [{fetcher.name}] 获取 {stock_code}...")
-                df = fetcher.get_daily_data(
-                    stock_code=stock_code,
-                    start_date=start_date,
-                    end_date=end_date,
-                    days=days
-                )
-                
-                if df is not None and not df.empty:
-                    logger.info(f"[{fetcher.name}] 成功获取 {stock_code}")
-                    return df, fetcher.name
-                    
-            except Exception as e:
-                error_msg = f"[{fetcher.name}] 失败: {str(e)}"
-                logger.warning(error_msg)
-                errors.append(error_msg)
-                # 继续尝试下一个数据源
-                continue
-        
-        # 所有数据源都失败
-        error_summary = f"所有数据源获取 {stock_code} 失败:\n" + "\n".join(errors)
-        logger.error(error_summary)
-        raise DataFetchError(error_summary)
+        return route_daily_data(
+            fetchers=self._fetchers,
+            data_fetch_error_cls=DataFetchError,
+            stock_code=stock_code,
+            start_date=start_date,
+            end_date=end_date,
+            days=days,
+        )
     
     @property
     def available_fetchers(self) -> List[str]:
@@ -1147,3 +892,23 @@ class DataFetcherManager:
                 logger.warning(f"[{fetcher.name}] 获取板块排行失败: {e}")
                 continue
         return [], []
+
+    def batch_get_daily_data(
+        self,
+        stock_codes: List[str],
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        days: int = 30,
+        max_workers: int = 5,
+        show_progress: bool = True
+    ) -> List[Tuple[str, pd.DataFrame, str]]:
+        """Batch fetch daily data while preserving the existing manager API."""
+        return batch_get_daily_data_helper(
+            get_daily_data=self.get_daily_data,
+            stock_codes=stock_codes,
+            start_date=start_date,
+            end_date=end_date,
+            days=days,
+            max_workers=max_workers,
+            show_progress=show_progress,
+        )

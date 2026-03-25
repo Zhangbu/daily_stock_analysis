@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -25,6 +25,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _parse_strategy_ids_param(strategy_ids: Optional[str]) -> List[str]:
+    """Parse comma-separated strategy ids from a query parameter."""
+    if not strategy_ids:
+        return []
+    return [item.strip() for item in strategy_ids.split(",") if item.strip()]
+
+
 @router.post(
     "/run",
     response_model=BacktestRunResponse,
@@ -43,6 +50,7 @@ def run_backtest(
         service = BacktestService(db_manager)
         stats = service.run_backtest(
             code=request.code,
+            strategy_ids=request.strategy_ids,
             force=request.force,
             eval_window_days=request.eval_window_days,
             min_age_days=request.min_age_days,
@@ -69,6 +77,7 @@ def run_backtest(
 )
 def get_backtest_results(
     code: Optional[str] = Query(None, description="股票代码筛选"),
+    strategy_ids: Optional[str] = Query(None, description="策略筛选，逗号分隔"),
     eval_window_days: Optional[int] = Query(None, ge=1, le=120, description="评估窗口过滤"),
     page: int = Query(1, ge=1, description="页码"),
     limit: int = Query(20, ge=1, le=200, description="每页数量"),
@@ -76,7 +85,13 @@ def get_backtest_results(
 ) -> BacktestResultsResponse:
     try:
         service = BacktestService(db_manager)
-        data = service.get_recent_evaluations(code=code, eval_window_days=eval_window_days, limit=limit, page=page)
+        data = service.get_recent_evaluations(
+            code=code,
+            strategy_ids=_parse_strategy_ids_param(strategy_ids),
+            eval_window_days=eval_window_days,
+            limit=limit,
+            page=page,
+        )
         items = [BacktestResultItem(**item) for item in data.get("items", [])]
         return BacktestResultsResponse(
             total=int(data.get("total", 0)),
@@ -103,12 +118,18 @@ def get_backtest_results(
     summary="获取整体回测表现",
 )
 def get_overall_performance(
+    strategy_ids: Optional[str] = Query(None, description="策略筛选，逗号分隔"),
     eval_window_days: Optional[int] = Query(None, ge=1, le=120, description="评估窗口过滤"),
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> PerformanceMetrics:
     try:
         service = BacktestService(db_manager)
-        summary = service.get_summary(scope="overall", code=None, eval_window_days=eval_window_days)
+        summary = service.get_summary(
+            scope="overall",
+            code=None,
+            strategy_ids=_parse_strategy_ids_param(strategy_ids),
+            eval_window_days=eval_window_days,
+        )
         if summary is None:
             raise HTTPException(
                 status_code=404,
@@ -137,12 +158,18 @@ def get_overall_performance(
 )
 def get_stock_performance(
     code: str,
+    strategy_ids: Optional[str] = Query(None, description="策略筛选，逗号分隔"),
     eval_window_days: Optional[int] = Query(None, ge=1, le=120, description="评估窗口过滤"),
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> PerformanceMetrics:
     try:
         service = BacktestService(db_manager)
-        summary = service.get_summary(scope="stock", code=code, eval_window_days=eval_window_days)
+        summary = service.get_summary(
+            scope="stock",
+            code=code,
+            strategy_ids=_parse_strategy_ids_param(strategy_ids),
+            eval_window_days=eval_window_days,
+        )
         if summary is None:
             raise HTTPException(
                 status_code=404,
@@ -157,4 +184,3 @@ def get_stock_performance(
             status_code=500,
             detail={"error": "internal_error", "message": f"查询单股表现失败: {str(exc)}"},
         )
-

@@ -37,6 +37,7 @@
 | 复盘 | 大盘复盘 | 每日市场概览、板块涨跌；支持 cn(A股)/us(美股)/both(两者) 切换 |
 | 图片识别 | 从图片添加 | 上传自选股截图，Vision LLM 自动提取股票代码，一键加入监控 |
 | 回测 | AI 回测验证 | 自动评估历史分析准确率，方向胜率、止盈止损命中率 |
+| **选股** | **市场筛选** | **支持 A股/美股切换，既可用实时行情筛选，也可基于已同步历史数据做数据库评分排序** |
 | **Agent 问股** | **策略对话** | **多轮策略问答，支持均线金叉/缠论/波浪等 11 种内置策略，Web/Bot/API 全链路** |
 | 推送 | 多渠道通知 | 企业微信、飞书、Telegram、钉钉、邮件、Pushover |
 | 自动化 | 定时运行 | GitHub Actions 定时执行，无需服务器 |
@@ -60,6 +61,10 @@
 | 精确点位 | 买入价、止损价、目标价 |
 | 检查清单 | 每项条件以「满足 / 注意 / 不满足」标记 |
 | 新闻时效 | 可配置新闻最大时效（默认 3 天），避免使用过时信息 |
+| 缓存治理 | 支持历史行情文件 TTL、正文抓取内存缓存 TTL、缓存命中统计、重复搜索请求短时去重 |
+| 可观测性 | 关键链路统一记录 `query_id / stock_code / provider / cache_hit / duration_ms`，Web 指标页支持手动刷新、缓存清理与最近趋势查看 |
+| 回测筛选 | 回测页支持按 Agent 策略多选筛选历史分析记录，查看不同策略建议的命中表现 |
+| 策略信号回测 | 新增独立策略信号回测页，直接基于技术规则生成买卖信号并调用内置回测引擎比较策略表现 |
 
 ## 🚀 快速开始
 
@@ -130,6 +135,7 @@
 | Secret 名称 | 说明 | 必填 |
 |------------|------|:----:|
 | `STOCK_LIST` | 自选股代码，如 `600519,hk00700,AAPL,TSLA` | ✅ |
+| `US_STOCK_LIST` | 美股同步/筛选池，如 `AAPL,MSFT,NVDA` | 可选 |
 | `TAVILY_API_KEYS` | [Tavily](https://tavily.com/) 搜索 API（新闻搜索） | 推荐 |
 | `SERPAPI_API_KEYS` | [SerpAPI](https://serpapi.com/baidu-search-api?utm_source=github_daily_stock_analysis) 全渠道搜索 | 可选 |
 | `BOCHA_API_KEYS` | [博查搜索](https://open.bocha.cn/) Web Search API（中文搜索优化，支持AI摘要，多个key用逗号分隔） | 可选 |
@@ -143,6 +149,17 @@
 | `AGENT_MAX_STEPS` | Agent 最大推理步数（默认 10） | 可选 |
 | `AGENT_STRATEGY_DIR` | 自定义策略目录（默认内置 `strategies/`） | 可选 |
 | `TRADING_DAY_CHECK_ENABLED` | 交易日检查（默认 `true`）：非交易日跳过执行；设为 `false` 或使用 `--force-run` 强制执行 | 可选 |
+| `MARKET_DATA_CACHE_TTL` | 历史行情文件缓存 TTL（秒，默认 `21600`） | 可选 |
+| `MARKET_SYNC_ENABLED` | 启用市场日线同步服务（默认 `false`） | 可选 |
+| `MARKET_SYNC_ON_STARTUP` | 启动后后台自动开始同步（默认 `false`） | 可选 |
+| `MARKET_SYNC_MARKETS` | 同步市场，支持 `cn,us`，逗号分隔 | 可选 |
+| `MARKET_SYNC_A_SHARE_FULL_ENABLED` | 启用 A 股全市场慢同步；关闭时仅同步自选股/配置池 | 可选 |
+| `MARKET_SYNC_HISTORICAL_DAYS` | 首次回补历史天数（默认 `365`） | 可选 |
+| `MARKET_SYNC_INCREMENTAL_DAYS` | 已有历史时的增量补数窗口（默认 `5`） | 可选 |
+| `MARKET_SYNC_SLEEP_SECONDS` | 单只股票之间休眠秒数，降低封禁风险 | 可选 |
+| `MARKET_SYNC_MAX_CODES_PER_RUN` | 单次最多同步多少只股票，`0` 表示不限 | 可选 |
+| `ARTICLE_CONTENT_CACHE_TTL` | 正文抓取内存缓存 TTL（秒，默认 `1800`） | 可选 |
+| `OBSERVABILITY_WARN_LATENCY_MS` | 慢请求观测阈值（毫秒，默认 `2000`） | 可选 |
 | `DYNAMIC_STOCK_SELECTION` | 动态选股模式（默认 `false`）：启用后自动分析热门板块龙头股，替代固定股票列表 | 可选 |
 | `HOT_SECTOR_COUNT` | 热门板块数量（默认 `3`）：动态选股时分析的热门板块数量 | 可选 |
 | `LEADERS_PER_SECTOR` | 每板块龙头股数量（默认 `2`）：每个热门板块选取的龙头股数量 | 可选 |
@@ -159,6 +176,21 @@
 #### 完成
 
 默认每个**工作日 18:00（北京时间）**自动执行，也可手动触发。默认非交易日（含 A/H/US 节假日）不执行；可使用 `TRADING_DAY_CHECK_ENABLED=false` 或 `--force-run` 强制执行。
+
+### 市场筛选与后台同步
+
+- Web 端 `/screening` 已支持明确切换 `A股 / 美股`
+- `数据库评分` 模式会优先使用本地已同步的近一年历史日线数据，为候选股票生成分数与原因
+- 筛选页现在会展示市场同步状态、处理进度、错误数，并支持手动触发同步
+- 筛选页会额外显示“自选股优先完成度”，方便确认核心股票是否已先同步完
+- 数据库评分结果会展示 `Top 候选 / 排名 / 机会等级 / 因子分解（趋势、动量、回撤、量能、风险、胜率代理）`
+- 筛选结果支持一键导出候选池 CSV，并可直接把候选股票加入 `STOCK_LIST` 自选股列表
+- 候选池支持保存为快照，并在页面展示最近快照的平均跟踪收益
+- Top N 候选支持直接拉取最新分析摘要，方便把筛选结果快速转成操作关注名单
+- `实时筛选` 模式沿用原有实时行情链路
+- 启用 `MARKET_SYNC_ENABLED=true` 与 `MARKET_SYNC_ON_STARTUP=true` 后，服务启动会后台慢速同步市场数据
+- 市场同步会优先处理本地缺失或落后较多的股票，尽量减少对已最新数据的重复抓取
+- 当前 A股可开启全市场慢同步；美股暂按 `STOCK_LIST + US_STOCK_LIST` 配置池同步
 
 ### 方式二：本地运行 / Docker 部署
 

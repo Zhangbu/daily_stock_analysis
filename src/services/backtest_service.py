@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import and_, select
 
@@ -31,6 +31,7 @@ class BacktestService:
         self,
         *,
         code: Optional[str] = None,
+        strategy_ids: Optional[Sequence[str]] = None,
         force: bool = False,
         eval_window_days: Optional[int] = None,
         min_age_days: Optional[int] = None,
@@ -60,6 +61,12 @@ class BacktestService:
             engine_version=str(engine_version),
             force=force,
         )
+        normalized_strategy_ids = self._normalize_strategy_ids(strategy_ids)
+        if normalized_strategy_ids:
+            candidates = [
+                analysis for analysis in candidates
+                if self._analysis_matches_strategies(analysis, normalized_strategy_ids)
+            ]
 
         processed = 0
         completed = 0
@@ -211,15 +218,62 @@ class BacktestService:
             "errors": errors,
         }
 
-    def get_recent_evaluations(self, *, code: Optional[str], eval_window_days: Optional[int] = None, limit: int = 50, page: int = 1) -> Dict[str, Any]:
+    def get_recent_evaluations(
+        self,
+        *,
+        code: Optional[str],
+        eval_window_days: Optional[int] = None,
+        strategy_ids: Optional[Sequence[str]] = None,
+        limit: int = 50,
+        page: int = 1,
+    ) -> Dict[str, Any]:
+        normalized_strategy_ids = self._normalize_strategy_ids(strategy_ids)
+        if normalized_strategy_ids:
+            rows = self.repo.get_results_for_filters(code=code, eval_window_days=eval_window_days)
+            rows = self._filter_results_by_strategies(rows, normalized_strategy_ids)
+            total = len(rows)
+            offset = max(page - 1, 0) * limit
+            page_rows = rows[offset: offset + limit]
+            analysis_map = self.repo.get_analysis_map(row.analysis_history_id for row in page_rows)
+            items = [self._result_to_dict(r, analysis_map.get(int(r.analysis_history_id))) for r in page_rows]
+            return {"total": total, "page": page, "limit": limit, "items": items}
+
         offset = max(page - 1, 0) * limit
         rows, total = self.repo.get_results_paginated(code=code, eval_window_days=eval_window_days, days=None, offset=offset, limit=limit)
-        items = [self._result_to_dict(r) for r in rows]
+        analysis_map = self.repo.get_analysis_map(row.analysis_history_id for row in rows)
+        items = [self._result_to_dict(r, analysis_map.get(int(r.analysis_history_id))) for r in rows]
         return {"total": total, "page": page, "limit": limit, "items": items}
 
-    def get_summary(self, *, scope: str, code: Optional[str], eval_window_days: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    def get_summary(
+        self,
+        *,
+        scope: str,
+        code: Optional[str],
+        eval_window_days: Optional[int] = None,
+        strategy_ids: Optional[Sequence[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
         config = get_config()
         engine_version = str(getattr(config, "backtest_engine_version", "v1"))
+        normalized_strategy_ids = self._normalize_strategy_ids(strategy_ids)
+
+        if normalized_strategy_ids:
+            rows = self.repo.get_results_for_filters(
+                code=None if scope == "overall" else code,
+                eval_window_days=eval_window_days,
+                engine_version=engine_version,
+            )
+            rows = self._filter_results_by_strategies(rows, normalized_strategy_ids)
+            if not rows:
+                return None
+            summary = BacktestEngine.compute_summary(
+                results=rows,
+                scope=scope,
+                code=OVERALL_SENTINEL_CODE if scope == "overall" else code,
+                eval_window_days=int(eval_window_days or rows[0].eval_window_days),
+                engine_version=engine_version,
+            )
+            return summary
+
         lookup_code = OVERALL_SENTINEL_CODE if scope == "overall" else code
         summary = self.repo.get_summary(
             scope=scope,
@@ -230,6 +284,32 @@ class BacktestService:
         if summary is None:
             return None
         return self._summary_to_dict(summary)
+
+    def _filter_results_by_strategies(
+        self,
+        rows: Sequence[BacktestResult],
+        strategy_ids: Sequence[str],
+    ) -> List[BacktestResult]:
+        analysis_map = self.repo.get_analysis_map(row.analysis_history_id for row in rows)
+        filtered: List[BacktestResult] = []
+        for row in rows:
+            analysis = analysis_map.get(int(row.analysis_history_id))
+            if analysis and self._analysis_matches_strategies(analysis, strategy_ids):
+                filtered.append(row)
+        return filtered
+
+    @staticmethod
+    def _normalize_strategy_ids(strategy_ids: Optional[Sequence[str]]) -> List[str]:
+        if not strategy_ids:
+            return []
+        normalized = [str(item).strip() for item in strategy_ids if str(item).strip()]
+        return list(dict.fromkeys(normalized))
+
+    def _analysis_matches_strategies(self, analysis, strategy_ids: Sequence[str]) -> bool:
+        analysis_strategies = self.repo.parse_strategy_ids_from_snapshot(getattr(analysis, "context_snapshot", None))
+        if not analysis_strategies:
+            return False
+        return bool(set(analysis_strategies) & set(strategy_ids))
 
     def _resolve_analysis_date(self, analysis) -> Optional[date]:
         parsed = self.repo.parse_analysis_date_from_snapshot(analysis.context_snapshot)
@@ -330,10 +410,14 @@ class BacktestService:
         )
 
     @staticmethod
-    def _result_to_dict(row: BacktestResult) -> Dict[str, Any]:
+    def _result_to_dict(row: BacktestResult, analysis=None) -> Dict[str, Any]:
+        strategy_ids = BacktestRepository.parse_strategy_ids_from_snapshot(
+            getattr(analysis, "context_snapshot", None)
+        )
         return {
             "analysis_history_id": row.analysis_history_id,
             "code": row.code,
+            "strategy_ids": strategy_ids,
             "analysis_date": row.analysis_date.isoformat() if row.analysis_date else None,
             "eval_window_days": row.eval_window_days,
             "engine_version": row.engine_version,

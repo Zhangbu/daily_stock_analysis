@@ -7,6 +7,7 @@
 
 export interface BacktestRunRequest {
   code?: string;
+  strategyIds?: string[];
   force?: boolean;
   evalWindowDays?: number;
   minAgeDays?: number;
@@ -26,6 +27,7 @@ export interface BacktestRunResponse {
 export interface BacktestResultItem {
   analysisHistoryId: number;
   code: string;
+  strategyIds: string[];
   analysisDate?: string;
   evalWindowDays: number;
   engineVersion: string;

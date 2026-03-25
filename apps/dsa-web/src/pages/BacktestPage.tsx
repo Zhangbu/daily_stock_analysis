@@ -1,6 +1,7 @@
 import type React from 'react';
 import { useState, useEffect, useCallback } from 'react';
 import { backtestApi } from '../api/backtest';
+import { agentApi, type StrategyInfo } from '../api/agent';
 import { Card, Badge, Pagination } from '../components/common';
 import type {
   BacktestResultItem,
@@ -111,6 +112,8 @@ const BacktestPage: React.FC = () => {
   const [codeFilter, setCodeFilter] = useState('');
   const [evalDays, setEvalDays] = useState('');
   const [forceRerun, setForceRerun] = useState(false);
+  const [availableStrategies, setAvailableStrategies] = useState<StrategyInfo[]>([]);
+  const [selectedStrategies, setSelectedStrategies] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [runResult, setRunResult] = useState<BacktestRunResponse | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -128,10 +131,16 @@ const BacktestPage: React.FC = () => {
   const [isLoadingPerf, setIsLoadingPerf] = useState(false);
 
   // Fetch results
-  const fetchResults = useCallback(async (page = 1, code?: string, windowDays?: number) => {
+  const fetchResults = useCallback(async (page = 1, code?: string, windowDays?: number, strategyIds?: string[]) => {
     setIsLoadingResults(true);
     try {
-      const response = await backtestApi.getResults({ code: code || undefined, evalWindowDays: windowDays, page, limit: pageSize });
+      const response = await backtestApi.getResults({
+        code: code || undefined,
+        strategyIds,
+        evalWindowDays: windowDays,
+        page,
+        limit: pageSize,
+      });
       setResults(response.items);
       setTotalResults(response.total);
       setCurrentPage(response.page);
@@ -143,14 +152,14 @@ const BacktestPage: React.FC = () => {
   }, []);
 
   // Fetch performance
-  const fetchPerformance = useCallback(async (code?: string, windowDays?: number) => {
+  const fetchPerformance = useCallback(async (code?: string, windowDays?: number, strategyIds?: string[]) => {
     setIsLoadingPerf(true);
     try {
-      const overall = await backtestApi.getOverallPerformance(windowDays);
+      const overall = await backtestApi.getOverallPerformance(windowDays, strategyIds);
       setOverallPerf(overall);
 
       if (code) {
-        const stock = await backtestApi.getStockPerformance(code, windowDays);
+        const stock = await backtestApi.getStockPerformance(code, windowDays, strategyIds);
         setStockPerf(stock);
       } else {
         setStockPerf(null);
@@ -165,6 +174,7 @@ const BacktestPage: React.FC = () => {
   // Initial load — fetch performance first, then filter results by its window
   useEffect(() => {
     const init = async () => {
+      agentApi.getStrategies().then((res) => setAvailableStrategies(res.strategies)).catch(() => {});
       // Get latest performance (unfiltered returns most recent summary)
       const overall = await backtestApi.getOverallPerformance();
       setOverallPerf(overall);
@@ -173,7 +183,7 @@ const BacktestPage: React.FC = () => {
       if (windowDays && !evalDays) {
         setEvalDays(String(windowDays));
       }
-      fetchResults(1, undefined, windowDays);
+      fetchResults(1, undefined, windowDays, []);
     };
     init();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -188,14 +198,15 @@ const BacktestPage: React.FC = () => {
       const evalWindowDays = evalDays ? parseInt(evalDays, 10) : undefined;
       const response = await backtestApi.run({
         code,
+        strategyIds: selectedStrategies,
         force: forceRerun || undefined,
         minAgeDays: forceRerun ? 0 : undefined,
         evalWindowDays,
       });
       setRunResult(response);
       // Refresh data with same eval_window_days
-      fetchResults(1, codeFilter.trim() || undefined, evalWindowDays);
-      fetchPerformance(codeFilter.trim() || undefined, evalWindowDays);
+      fetchResults(1, codeFilter.trim() || undefined, evalWindowDays, selectedStrategies);
+      fetchPerformance(codeFilter.trim() || undefined, evalWindowDays, selectedStrategies);
     } catch (err) {
       setRunError(err instanceof Error ? err.message : 'Backtest failed');
     } finally {
@@ -208,8 +219,8 @@ const BacktestPage: React.FC = () => {
     const code = codeFilter.trim() || undefined;
     const windowDays = evalDays ? parseInt(evalDays, 10) : undefined;
     setCurrentPage(1);
-    fetchResults(1, code, windowDays);
-    fetchPerformance(code, windowDays);
+    fetchResults(1, code, windowDays, selectedStrategies);
+    fetchPerformance(code, windowDays, selectedStrategies);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -222,7 +233,15 @@ const BacktestPage: React.FC = () => {
   const totalPages = Math.ceil(totalResults / pageSize);
   const handlePageChange = (page: number) => {
     const windowDays = evalDays ? parseInt(evalDays, 10) : undefined;
-    fetchResults(page, codeFilter.trim() || undefined, windowDays);
+    fetchResults(page, codeFilter.trim() || undefined, windowDays, selectedStrategies);
+  };
+
+  const toggleStrategy = (strategyId: string) => {
+    setSelectedStrategies((prev) => (
+      prev.includes(strategyId)
+        ? prev.filter((item) => item !== strategyId)
+        : [...prev, strategyId]
+    ));
   };
 
   return (
@@ -301,6 +320,40 @@ const BacktestPage: React.FC = () => {
             )}
           </button>
         </div>
+        <div className="mt-3 max-w-4xl rounded-xl border border-white/5 bg-elevated/60 px-3 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium uppercase tracking-wider text-muted">Strategies</span>
+            <button
+              type="button"
+              onClick={() => setSelectedStrategies([])}
+              className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-secondary hover:text-white"
+            >
+              All analysis
+            </button>
+            {availableStrategies.map((strategy) => {
+              const active = selectedStrategies.includes(strategy.id);
+              return (
+                <button
+                  key={strategy.id}
+                  type="button"
+                  onClick={() => toggleStrategy(strategy.id)}
+                  className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                    active
+                      ? 'border-cyan/40 bg-cyan/10 text-cyan'
+                      : 'border-white/10 text-secondary hover:text-white'
+                  }`}
+                  title={strategy.description}
+                >
+                  {strategy.name}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            当前页面回测的是历史分析记录里的操作建议命中情况，不是传统 K 线信号策略回测。
+            选中策略后，只会统计带有对应 Agent 策略标识的分析记录；可多选。
+          </p>
+        </div>
         {runResult && (
           <div className="mt-2 max-w-4xl">
             <RunSummary data={runResult} />
@@ -360,6 +413,7 @@ const BacktestPage: React.FC = () => {
                   <thead>
                     <tr className="bg-elevated text-left">
                       <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider">Code</th>
+                      <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider">Strategy</th>
                       <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider">Date</th>
                       <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider">Advice</th>
                       <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase tracking-wider">Dir.</th>
@@ -377,6 +431,9 @@ const BacktestPage: React.FC = () => {
                         className="border-t border-white/5 hover:bg-hover transition-colors"
                       >
                         <td className="px-3 py-2 font-mono text-cyan text-xs">{row.code}</td>
+                        <td className="px-3 py-2 text-xs text-secondary">
+                          {row.strategyIds?.length ? row.strategyIds.join(', ') : '--'}
+                        </td>
                         <td className="px-3 py-2 text-xs text-secondary">{row.analysisDate || '--'}</td>
                         <td className="px-3 py-2 text-xs text-white truncate max-w-[140px]" title={row.operationAdvice || ''}>
                           {row.operationAdvice || '--'}

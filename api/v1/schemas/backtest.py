@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 class BacktestRunRequest(BaseModel):
     code: Optional[str] = Field(None, description="仅回测指定股票")
+    strategy_ids: List[str] = Field(default_factory=list, description="按策略筛选历史分析记录")
     force: bool = Field(False, description="强制重新计算")
     eval_window_days: Optional[int] = Field(None, ge=1, le=120, description="评估窗口（交易日数）")
     min_age_days: Optional[int] = Field(None, ge=0, le=365, description="分析记录最小天龄（0=不限）")
@@ -27,6 +28,7 @@ class BacktestRunResponse(BaseModel):
 class BacktestResultItem(BaseModel):
     analysis_history_id: int
     code: str
+    strategy_ids: List[str] = Field(default_factory=list)
     analysis_date: Optional[str] = None
     eval_window_days: int
     engine_version: str
@@ -91,4 +93,3 @@ class PerformanceMetrics(BaseModel):
 
     advice_breakdown: Dict[str, Any] = Field(default_factory=dict)
     diagnostics: Dict[str, Any] = Field(default_factory=dict)
-

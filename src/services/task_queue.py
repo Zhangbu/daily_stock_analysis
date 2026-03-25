@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from asyncio import Queue as AsyncQueue
 
 from data_provider.base import canonical_stock_code
+from utils.log_utils import build_log_context
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,7 @@ class AnalysisTaskQueue:
         self._max_history = 100
         
         self._initialized = True
-        logger.info(f"[TaskQueue] 初始化完成，最大并发: {max_workers}")
+        logger.info(f"{build_log_context(component='task_queue')} [TaskQueue] 初始化完成，最大并发: {max_workers}")
     
     @property
     def executor(self) -> ThreadPoolExecutor:
@@ -249,7 +250,8 @@ class AnalysisTaskQueue:
             )
             self._futures[task_id] = future
             
-            logger.info(f"[TaskQueue] 任务已提交: {stock_code} -> {task_id}")
+            context = build_log_context(task_id=task_id, stock_code=stock_code, report_type=report_type)
+            logger.info(f"{context} [TaskQueue] 任务已提交")
         
         # 广播任务创建事件（锁外执行避免死锁）
         self._broadcast_event("task_created", task_info.to_dict())

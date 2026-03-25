@@ -13,6 +13,7 @@ A股自选股智能分析系统 - 搜索服务模块
 
 import logging
 import random
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -20,7 +21,6 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from itertools import cycle
 import requests
-from newspaper import Article, Config
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -30,6 +30,16 @@ from tenacity import (
 )
 
 from data_provider.us_index_mapping import is_us_index_code
+from src.search.cache_store import search_cache_store
+from src.search.content_fetcher import fetch_url_content
+from src.search.providers import (
+    BaseSearchProvider as ExtractedBaseSearchProvider,
+    BochaSearchProvider as ExtractedBochaSearchProvider,
+    BraveSearchProvider as ExtractedBraveSearchProvider,
+    SerpAPISearchProvider as ExtractedSerpAPISearchProvider,
+    TavilySearchProvider as ExtractedTavilySearchProvider,
+)
+from src.search.types import SearchResponse as ExtractedSearchResponse, SearchResult as ExtractedSearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -51,37 +61,6 @@ _SEARCH_TRANSIENT_EXCEPTIONS = (
 def _post_with_retry(url: str, *, headers: Dict[str, str], json: Dict[str, Any], timeout: int) -> requests.Response:
     """POST with retry on transient SSL/network errors."""
     return requests.post(url, headers=headers, json=json, timeout=timeout)
-
-
-def fetch_url_content(url: str, timeout: int = 5) -> str:
-    """
-    获取 URL 网页正文内容 (使用 newspaper3k)
-    """
-    try:
-        # 配置 newspaper3k
-        config = Config()
-        config.browser_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        config.request_timeout = timeout
-        config.fetch_images = False  # 不下载图片
-        config.memoize_articles = False # 不缓存
-
-        article = Article(url, config=config, language='zh') # 默认中文，但也支持其他
-        article.download()
-        article.parse()
-
-        # 获取正文
-        text = article.text.strip()
-
-        # 简单的后处理，去除空行
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-        text = '\n'.join(lines)
-
-        return text[:1500]  # 限制返回长度（比 bs4 稍微多一点，因为 newspaper 解析更干净）
-    except Exception as e:
-        logger.debug(f"Fetch content failed for {url}: {e}")
-
-    return ""
-
 
 @dataclass
 class SearchResult:
@@ -118,6 +97,15 @@ class SearchResponse:
             lines.append(f"\n{i}. {result.to_text()}")
         
         return "\n".join(lines)
+
+
+@dataclass
+class _InflightSearchRequest:
+    """Coordinate one concurrent search request across callers."""
+
+    event: threading.Event = field(default_factory=threading.Event)
+    response: Optional[Any] = None
+    error: Optional[BaseException] = None
 
 
 class BaseSearchProvider(ABC):
@@ -899,6 +887,17 @@ class BraveSearchProvider(BaseSearchProvider):
             return '未知来源'
 
 
+# Switch SearchService to the extracted provider/type implementations while
+# keeping legacy symbols in this module for compatibility during migration.
+SearchResult = ExtractedSearchResult
+SearchResponse = ExtractedSearchResponse
+BaseSearchProvider = ExtractedBaseSearchProvider
+TavilySearchProvider = ExtractedTavilySearchProvider
+SerpAPISearchProvider = ExtractedSerpAPISearchProvider
+BochaSearchProvider = ExtractedBochaSearchProvider
+BraveSearchProvider = ExtractedBraveSearchProvider
+
+
 class SearchService:
     """
     搜索服务
@@ -974,10 +973,10 @@ class SearchService:
         if not self._providers:
             logger.warning("未配置任何搜索引擎 API Key，新闻搜索功能将不可用")
 
-        # In-memory search result cache: {cache_key: (timestamp, SearchResponse)}
-        self._cache: Dict[str, Tuple[float, 'SearchResponse']] = {}
         # Default cache TTL in seconds (10 minutes)
         self._cache_ttl: int = 600
+        self._inflight_lock = threading.Lock()
+        self._inflight_requests: Dict[str, "_InflightSearchRequest"] = {}
     
     @staticmethod
     def _is_foreign_stock(stock_code: str) -> bool:
@@ -1031,33 +1030,48 @@ class SearchService:
 
     def _get_cached(self, key: str) -> Optional['SearchResponse']:
         """Return cached SearchResponse if still valid, else None."""
-        entry = self._cache.get(key)
-        if entry is None:
-            return None
-        ts, response = entry
-        if time.time() - ts > self._cache_ttl:
-            del self._cache[key]
-            return None
-        logger.debug(f"Search cache hit: {key[:60]}...")
+        response = search_cache_store.get("search_response", key, self._cache_ttl)
+        if response is not None:
+            logger.debug(f"Search cache hit: {key[:60]}...")
         return response
 
     def _put_cache(self, key: str, response: 'SearchResponse') -> None:
         """Store a successful SearchResponse in cache."""
-        # Hard cap: evict oldest entries when cache exceeds limit
-        _MAX_CACHE_SIZE = 500
-        if len(self._cache) >= _MAX_CACHE_SIZE:
-            now = time.time()
-            # First pass: remove expired entries
-            expired = [k for k, (ts, _) in self._cache.items() if now - ts > self._cache_ttl]
-            for k in expired:
-                del self._cache[k]
-            # Second pass: if still over limit, evict oldest entries (FIFO)
-            if len(self._cache) >= _MAX_CACHE_SIZE:
-                excess = len(self._cache) - _MAX_CACHE_SIZE + 1
-                oldest = sorted(self._cache.keys(), key=lambda k: self._cache[k][0])[:excess]
-                for k in oldest:
-                    del self._cache[k]
-        self._cache[key] = (time.time(), response)
+        search_cache_store.put("search_response", key, response, max_entries=500)
+
+    def get_cache_metrics(self) -> Dict[str, Dict[str, int]]:
+        """Expose search-related cache metrics."""
+        return search_cache_store.stats()
+
+    def _run_inflight_request(self, request_key: str, fn):
+        """Deduplicate concurrent search requests for the same cache key."""
+        is_leader = False
+        with self._inflight_lock:
+            inflight = self._inflight_requests.get(request_key)
+            if inflight is None:
+                inflight = _InflightSearchRequest()
+                self._inflight_requests[request_key] = inflight
+                is_leader = True
+
+        if not is_leader:
+            inflight.event.wait(timeout=30)
+            if inflight.response is not None:
+                return inflight.response
+            if inflight.error is not None:
+                raise inflight.error
+            return fn()
+
+        try:
+            response = fn()
+            inflight.response = response
+            return response
+        except Exception as exc:
+            inflight.error = exc
+            raise
+        finally:
+            inflight.event.set()
+            with self._inflight_lock:
+                self._inflight_requests.pop(request_key, None)
     
     def search_stock_news(
         self,
@@ -1114,28 +1128,34 @@ class SearchService:
             logger.info(f"使用缓存搜索结果: {stock_name}({stock_code})")
             return cached
 
-        # 依次尝试各个搜索引擎
-        for provider in self._providers:
-            if not provider.is_available:
-                continue
-            
-            response = provider.search(query, max_results, days=search_days)
-            
-            if response.success and response.results:
-                logger.info(f"使用 {provider.name} 搜索成功")
-                self._put_cache(cache_key, response)
-                return response
-            else:
+        def _search_news() -> SearchResponse:
+            second_cached = self._get_cached(cache_key)
+            if second_cached is not None:
+                return second_cached
+
+            # 依次尝试各个搜索引擎
+            for provider in self._providers:
+                if not provider.is_available:
+                    continue
+
+                response = provider.search(query, max_results, days=search_days)
+
+                if response.success and response.results:
+                    logger.info(f"使用 {provider.name} 搜索成功")
+                    self._put_cache(cache_key, response)
+                    return response
                 logger.warning(f"{provider.name} 搜索失败: {response.error_message}，尝试下一个引擎")
-        
-        # 所有引擎都失败
-        return SearchResponse(
-            query=query,
-            results=[],
-            provider="None",
-            success=False,
-            error_message="所有搜索引擎都不可用或搜索失败"
-        )
+
+            # 所有引擎都失败
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider="None",
+                success=False,
+                error_message="所有搜索引擎都不可用或搜索失败"
+            )
+
+        return self._run_inflight_request(f"search_response:{cache_key}", _search_news)
     
     def search_stock_events(
         self,
@@ -1167,24 +1187,37 @@ class SearchService:
         query = f"{stock_name} ({event_query})"
         
         logger.info(f"搜索股票事件: {stock_name}({stock_code}) - {event_types}")
-        
-        # 依次尝试各个搜索引擎
-        for provider in self._providers:
-            if not provider.is_available:
-                continue
-            
-            response = provider.search(query, max_results=5)
-            
-            if response.success:
-                return response
-        
-        return SearchResponse(
-            query=query,
-            results=[],
-            provider="None",
-            success=False,
-            error_message="事件搜索失败"
-        )
+
+        cache_key = self._cache_key(query, 5, 7)
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        def _search_events() -> SearchResponse:
+            second_cached = self._get_cached(cache_key)
+            if second_cached is not None:
+                return second_cached
+
+            # 依次尝试各个搜索引擎
+            for provider in self._providers:
+                if not provider.is_available:
+                    continue
+
+                response = provider.search(query, max_results=5)
+
+                if response.success:
+                    self._put_cache(cache_key, response)
+                    return response
+
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider="None",
+                success=False,
+                error_message="事件搜索失败"
+            )
+
+        return self._run_inflight_request(f"search_response:{cache_key}", _search_events)
     
     def search_comprehensive_intel(
         self,
@@ -1208,9 +1241,6 @@ class SearchService:
         Returns:
             {维度名称: SearchResponse} 字典
         """
-        results = {}
-        search_count = 0
-
         is_foreign = self._is_foreign_stock(stock_code)
         is_index_etf = self.is_index_or_etf(stock_code, stock_name)
 
@@ -1250,37 +1280,49 @@ class SearchService:
             ]
         
         logger.info(f"开始多维度情报搜索: {stock_name}({stock_code})")
-        
-        # 轮流使用不同的搜索引擎
-        provider_index = 0
-        
-        for dim in search_dimensions:
-            if search_count >= max_searches:
-                break
-            
-            # 选择搜索引擎（轮流使用）
-            available_providers = [p for p in self._providers if p.is_available]
-            if not available_providers:
-                break
-            
-            provider = available_providers[provider_index % len(available_providers)]
-            provider_index += 1
-            
-            logger.info(f"[情报搜索] {dim['desc']}: 使用 {provider.name}")
-            
-            response = provider.search(dim['query'], max_results=3, days=self.news_max_age_days)
-            results[dim['name']] = response
-            search_count += 1
-            
-            if response.success:
-                logger.info(f"[情报搜索] {dim['desc']}: 获取 {len(response.results)} 条结果")
-            else:
-                logger.warning(f"[情报搜索] {dim['desc']}: 搜索失败 - {response.error_message}")
-            
-            # 短暂延迟避免请求过快
-            time.sleep(0.5)
-        
-        return results
+
+        cache_key = self._cache_key(f"intel:{stock_code}:{stock_name}", max_searches, self.news_max_age_days)
+        cached = search_cache_store.get("search_intel", cache_key, self._cache_ttl)
+        if cached is not None:
+            logger.info(f"使用缓存多维情报结果: {stock_name}({stock_code})")
+            return cached
+
+        def _search_intel() -> Dict[str, SearchResponse]:
+            second_cached = search_cache_store.get("search_intel", cache_key, self._cache_ttl)
+            if second_cached is not None:
+                return second_cached
+
+            local_results: Dict[str, SearchResponse] = {}
+            provider_index = 0
+
+            for dim in search_dimensions:
+                if len(local_results) >= max_searches:
+                    break
+
+                available_providers = [p for p in self._providers if p.is_available]
+                if not available_providers:
+                    break
+
+                provider = available_providers[provider_index % len(available_providers)]
+                provider_index += 1
+
+                logger.info(f"[情报搜索] {dim['desc']}: 使用 {provider.name}")
+
+                response = provider.search(dim['query'], max_results=3, days=self.news_max_age_days)
+                local_results[dim['name']] = response
+
+                if response.success:
+                    logger.info(f"[情报搜索] {dim['desc']}: 获取 {len(response.results)} 条结果")
+                else:
+                    logger.warning(f"[情报搜索] {dim['desc']}: 搜索失败 - {response.error_message}")
+
+                # 短暂延迟避免请求过快
+                time.sleep(0.5)
+
+            search_cache_store.put("search_intel", cache_key, local_results, max_entries=200)
+            return local_results
+
+        return self._run_inflight_request(f"search_intel:{cache_key}", _search_intel)
     
     def format_intel_report(self, intel_results: Dict[str, SearchResponse], stock_name: str) -> str:
         """

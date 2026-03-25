@@ -48,6 +48,18 @@ DEFAULT_QUIET_LOGGERS = [
 ]
 
 
+def _ensure_utf8_console_streams() -> None:
+    """Best-effort UTF-8 console setup for Windows/Conda terminals."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+            except Exception:
+                # Keep logging initialization resilient across Python runtimes.
+                pass
+
+
 def setup_logging(
     log_prefix: str = "app",
     log_dir: str = "./logs",
@@ -75,6 +87,8 @@ def setup_logging(
         level = console_level
     else:
         level = logging.DEBUG if debug else logging.INFO
+
+    _ensure_utf8_console_streams()
 
     # 创建日志目录
     log_path = Path(log_dir)

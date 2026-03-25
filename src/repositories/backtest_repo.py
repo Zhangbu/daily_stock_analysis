@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime, timedelta
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from sqlalchemy import and_, delete, desc, func, select
 
@@ -56,6 +56,41 @@ class BacktestRepository:
             query = query.order_by(desc(AnalysisHistory.created_at)).limit(limit)
             rows = session.execute(query).scalars().all()
             return list(rows)
+
+    def get_results_for_filters(
+        self,
+        *,
+        code: Optional[str],
+        eval_window_days: Optional[int] = None,
+        engine_version: Optional[str] = None,
+    ) -> List[BacktestResult]:
+        """Return result rows for dynamic filtering or summary computation."""
+        with self.db.get_session() as session:
+            conditions = []
+            if code:
+                conditions.append(BacktestResult.code == code)
+            if eval_window_days is not None:
+                conditions.append(BacktestResult.eval_window_days == eval_window_days)
+            if engine_version is not None:
+                conditions.append(BacktestResult.engine_version == engine_version)
+
+            where_clause = and_(*conditions) if conditions else True
+            rows = session.execute(
+                select(BacktestResult).where(where_clause).order_by(desc(BacktestResult.evaluated_at))
+            ).scalars().all()
+            return list(rows)
+
+    def get_analysis_map(self, analysis_ids: Iterable[int]) -> dict[int, AnalysisHistory]:
+        """Load analysis history rows keyed by id for enrichment/filtering."""
+        ids = sorted({int(item) for item in analysis_ids if item is not None})
+        if not ids:
+            return {}
+
+        with self.db.get_session() as session:
+            rows = session.execute(
+                select(AnalysisHistory).where(AnalysisHistory.id.in_(ids))
+            ).scalars().all()
+            return {int(row.id): row for row in rows}
 
     def save_result(self, result: BacktestResult) -> None:
         with self.db.get_session() as session:
@@ -219,3 +254,23 @@ class BacktestRepository:
             return datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
         except Exception:
             return None
+
+    @staticmethod
+    def parse_strategy_ids_from_snapshot(context_snapshot: Optional[str]) -> List[str]:
+        """Extract persisted strategy ids from an analysis snapshot."""
+        if not context_snapshot:
+            return []
+
+        try:
+            payload = json.loads(context_snapshot)
+        except Exception:
+            return []
+
+        if not isinstance(payload, dict):
+            return []
+
+        for key in ("selected_strategies", "strategy_ids", "skills"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [str(item).strip() for item in value if str(item).strip()]
+        return []
