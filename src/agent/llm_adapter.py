@@ -15,6 +15,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from src.config import get_config
+from src.llm.retry_policy import (
+    first_non_ascii_info as _first_non_ascii_info,
+    is_ascii_encode_error as _is_ascii_encode_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,31 @@ def _normalize_ascii_unsafe_for_openai(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _normalize_ascii_unsafe_for_openai(v) for k, v in value.items()}
     return value
+
+
+def _force_ascii_safe_for_openai(value: Any) -> Any:
+    """Recursively convert strings to ASCII-safe escaped text."""
+    if isinstance(value, str):
+        return value.encode("ascii", errors="backslashreplace").decode("ascii")
+    if isinstance(value, list):
+        return [_force_ascii_safe_for_openai(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _force_ascii_safe_for_openai(v) for k, v in value.items()}
+    return value
+
+
+def _require_ascii_config(name: str, value: Optional[str]) -> Optional[str]:
+    """Validate OpenAI client config fields to avoid hidden encoding failures."""
+    if value is None:
+        return None
+    cleaned = value.strip()
+    bad = _first_non_ascii_info(cleaned)
+    if bad is None:
+        return cleaned
+    idx, ch, codepoint = bad
+    raise ValueError(
+        f"{name} contains non-ASCII character at position {idx}: {repr(ch)} ({codepoint})"
+    )
 
 
 # ============================================================
@@ -194,10 +223,12 @@ class LLMToolAdapter:
         if openai_key and not openai_key.startswith("your_") and len(openai_key) >= 8:
             try:
                 from openai import OpenAI
-                client_kwargs = {"api_key": openai_key}
-                if config.openai_base_url:
-                    client_kwargs["base_url"] = config.openai_base_url
-                if config.openai_base_url and "aihubmix.com" in config.openai_base_url:
+                sanitized_key = _require_ascii_config("OPENAI_API_KEY", openai_key)
+                sanitized_base_url = _require_ascii_config("OPENAI_BASE_URL", config.openai_base_url)
+                client_kwargs = {"api_key": sanitized_key}
+                if sanitized_base_url:
+                    client_kwargs["base_url"] = sanitized_base_url
+                if sanitized_base_url and "aihubmix.com" in sanitized_base_url:
                     client_kwargs["default_headers"] = {"APP-Code": "GPIJ3886"}
                 self._openai_client = OpenAI(**client_kwargs)
                 self._openai_available = True
@@ -456,6 +487,7 @@ class LLMToolAdapter:
 
         model_name = config.openai_model or "gpt-4o-mini"
         openai_messages = _normalize_ascii_unsafe_for_openai(openai_messages)
+        openai_tools = _normalize_ascii_unsafe_for_openai(tools) if tools else []
         call_kwargs = {
             "model": model_name,
             "messages": openai_messages,
@@ -464,10 +496,20 @@ class LLMToolAdapter:
         payload = get_thinking_extra_body(model_name)
         if payload:
             call_kwargs["extra_body"] = payload
-        if tools:
-            call_kwargs["tools"] = tools
+        if openai_tools:
+            call_kwargs["tools"] = openai_tools
 
-        response = self._openai_client.chat.completions.create(**call_kwargs)
+        try:
+            response = self._openai_client.chat.completions.create(**call_kwargs)
+        except Exception as exc:
+            if not _is_ascii_encode_error(exc):
+                raise
+            logger.warning(
+                "Agent LLM OpenAI payload hit ASCII encode error, retrying with ASCII-safe escaped payload. model=%s",
+                model_name,
+            )
+            ascii_safe_kwargs = _force_ascii_safe_for_openai(call_kwargs)
+            response = self._openai_client.chat.completions.create(**ascii_safe_kwargs)
 
         # Parse response — guard against None/empty choices (non-standard API response)
         if not response.choices:

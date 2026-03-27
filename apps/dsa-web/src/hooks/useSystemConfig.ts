@@ -197,7 +197,7 @@ export function useSystemConfig() {
     setRetryAction(null);
 
     try {
-      const config = await systemConfigApi.getConfig(true);
+      const config = await systemConfigApi.getConfig(true, 'core');
       applyServerPayload(config.items, config.configVersion, config.maskToken);
       setToast(null);
     } catch (error: unknown) {
@@ -275,7 +275,7 @@ export function useSystemConfig() {
         items: changedItems,
       });
 
-      const refreshed = await systemConfigApi.getConfig(true);
+      const refreshed = await systemConfigApi.getConfig(true, 'core');
       applyServerPayload(refreshed.items, refreshed.configVersion, refreshed.maskToken);
 
       const warningText = updateResult.warnings?.length

@@ -12,8 +12,10 @@ class ConfigSchemaTestCase(unittest.TestCase):
         groups = config.grouped_fields()
         self.assertIn("ai", groups)
         self.assertIn("notification", groups)
+        self.assertIn("api_features", groups)
         self.assertIn("runtime", groups)
         self.assertIn("market_data_cache_ttl", groups["runtime"])
+        self.assertIn("enable_agent_api", groups["api_features"])
 
     def test_export_schema_contains_group_items(self):
         config = Config(stock_list=["600519"], openai_api_key="secret")

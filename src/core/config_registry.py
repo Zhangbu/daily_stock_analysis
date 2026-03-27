@@ -8,7 +8,7 @@ validation hints, and category grouping.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 SCHEMA_VERSION = "2026-02-09"
 
@@ -94,7 +94,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "REALTIME_SOURCE_PRIORITY": {
         "title": "Realtime Source Priority",
-        "description": "Comma-separated priority for realtime quote providers.",
+        "description": "Comma-separated priority for realtime quote providers (supports tencent, akshare_sina, efinance, akshare_em, tushare, yfinance).",
         "category": "data_source",
         "data_type": "string",
         "ui_control": "text",
@@ -358,9 +358,9 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "validation": {"min": 256, "max": 8192},
         "display_order": 38,
     },
-    "WECHAT_WEBHOOK_URL": {
-        "title": "WeChat Webhook URL",
-        "description": "Webhook URL for enterprise WeChat bot.",
+    "TELEGRAM_BOT_TOKEN": {
+        "title": "Telegram Bot Token",
+        "description": "Telegram bot token from BotFather.",
         "category": "notification",
         "data_type": "string",
         "ui_control": "password",
@@ -372,9 +372,79 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "validation": {},
         "display_order": 10,
     },
-    "DINGTALK_APP_KEY": {
-        "title": "DingTalk App Key",
-        "description": "DingTalk app key.",
+    "TELEGRAM_CHAT_ID": {
+        "title": "Telegram Chat ID",
+        "description": "Target chat id for telegram push.",
+        "category": "notification",
+        "data_type": "string",
+        "ui_control": "text",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": None,
+        "options": [],
+        "validation": {},
+        "display_order": 11,
+    },
+    "TELEGRAM_MESSAGE_THREAD_ID": {
+        "title": "Telegram Topic ID",
+        "description": "Optional topic (message_thread_id) for group topics.",
+        "category": "notification",
+        "data_type": "string",
+        "ui_control": "text",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": None,
+        "options": [],
+        "validation": {},
+        "display_order": 12,
+    },
+    "TELEGRAM_VERIFY_SSL": {
+        "title": "Telegram SSL Verify",
+        "description": "Verify Telegram HTTPS certificates. Disable only for trusted internal troubleshooting.",
+        "category": "notification",
+        "data_type": "boolean",
+        "ui_control": "switch",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "true",
+        "options": [],
+        "validation": {},
+        "display_order": 13,
+    },
+    "TELEGRAM_CA_BUNDLE": {
+        "title": "Telegram CA Bundle",
+        "description": "Optional CA bundle path used only for Telegram HTTPS requests.",
+        "category": "notification",
+        "data_type": "string",
+        "ui_control": "text",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": None,
+        "options": [],
+        "validation": {},
+        "display_order": 14,
+    },
+    "EMAIL_SENDER": {
+        "title": "Email Sender",
+        "description": "Sender email address.",
+        "category": "notification",
+        "data_type": "string",
+        "ui_control": "text",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": None,
+        "options": [],
+        "validation": {},
+        "display_order": 20,
+    },
+    "EMAIL_PASSWORD": {
+        "title": "Email Password / App Password",
+        "description": "SMTP auth password or app password.",
         "category": "notification",
         "data_type": "string",
         "ui_control": "password",
@@ -384,11 +454,25 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {},
-        "display_order": 20,
+        "display_order": 21,
     },
-    "DINGTALK_APP_SECRET": {
-        "title": "DingTalk App Secret",
-        "description": "DingTalk app secret.",
+    "EMAIL_RECEIVERS": {
+        "title": "Email Receivers",
+        "description": "Comma-separated receiver emails.",
+        "category": "notification",
+        "data_type": "array",
+        "ui_control": "textarea",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": None,
+        "options": [],
+        "validation": {"multi_value": True, "delimiter": ","},
+        "display_order": 22,
+    },
+    "DISCORD_WEBHOOK_URL": {
+        "title": "Discord Webhook URL",
+        "description": "Discord webhook URL for push.",
         "category": "notification",
         "data_type": "string",
         "ui_control": "password",
@@ -400,9 +484,9 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "validation": {},
         "display_order": 30,
     },
-    "PUSHPLUS_TOKEN": {
-        "title": "PushPlus Token",
-        "description": "Token for PushPlus notifications.",
+    "DISCORD_BOT_TOKEN": {
+        "title": "Discord Bot Token",
+        "description": "Discord bot token (optional if webhook configured).",
         "category": "notification",
         "data_type": "string",
         "ui_control": "password",
@@ -412,49 +496,21 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {},
-        "display_order": 40,
+        "display_order": 31,
     },
-    "CUSTOM_WEBHOOK_URLS": {
-        "title": "Custom Webhook URLs",
-        "description": "Comma-separated webhook URLs for custom notifications (DingTalk, Discord, Slack, etc.).",
-        "category": "notification",
-        "data_type": "array",
-        "ui_control": "textarea",
-        "is_sensitive": False,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": None,
-        "options": [],
-        "validation": {"multi_value": True, "delimiter": ","},
-        "display_order": 50,
-    },
-    "CUSTOM_WEBHOOK_BEARER_TOKEN": {
-        "title": "Custom Webhook Bearer Token",
-        "description": "Bearer token for authenticated custom webhooks.",
+    "DISCORD_MAIN_CHANNEL_ID": {
+        "title": "Discord Channel ID",
+        "description": "Discord channel id for bot API mode.",
         "category": "notification",
         "data_type": "string",
-        "ui_control": "password",
-        "is_sensitive": True,
+        "ui_control": "text",
+        "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
         "default_value": None,
         "options": [],
         "validation": {},
-        "display_order": 51,
-    },
-    "WEBHOOK_VERIFY_SSL": {
-        "title": "Webhook SSL Verify",
-        "description": "Verify HTTPS certificates for webhook requests. Set to false ONLY for self-signed certs in trusted internal networks. WARNING: Disabling allows MITM attacks—do NOT use on public networks.",
-        "category": "notification",
-        "data_type": "boolean",
-        "ui_control": "switch",
-        "is_sensitive": False,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": "true",
-        "options": [],
-        "validation": {},
-        "display_order": 52,
+        "display_order": 32,
     },
     "REPORT_SUMMARY_ONLY": {
         "title": "Report Summary Only",
@@ -666,6 +722,76 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "validation": {},
         "display_order": 40,
     },
+    "ENABLE_AGENT_API": {
+        "title": "Enable Agent API",
+        "description": "Register Agent API routes.",
+        "category": "agent",
+        "data_type": "boolean",
+        "ui_control": "switch",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "true",
+        "options": [],
+        "validation": {},
+        "display_order": 50,
+    },
+    "ENABLE_BACKTEST_API": {
+        "title": "Enable Backtest API",
+        "description": "Register advice backtest API routes.",
+        "category": "agent",
+        "data_type": "boolean",
+        "ui_control": "switch",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "true",
+        "options": [],
+        "validation": {},
+        "display_order": 51,
+    },
+    "ENABLE_STRATEGY_BACKTEST_API": {
+        "title": "Enable Strategy Backtest API",
+        "description": "Register strategy signal backtest API routes.",
+        "category": "agent",
+        "data_type": "boolean",
+        "ui_control": "switch",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "true",
+        "options": [],
+        "validation": {},
+        "display_order": 52,
+    },
+    "ENABLE_MARKET_SYNC_API": {
+        "title": "Enable Market Sync API",
+        "description": "Register market sync API routes.",
+        "category": "agent",
+        "data_type": "boolean",
+        "ui_control": "switch",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "true",
+        "options": [],
+        "validation": {},
+        "display_order": 53,
+    },
+    "ENABLE_SCREENING_API": {
+        "title": "Enable Screening API",
+        "description": "Register market screening API routes.",
+        "category": "agent",
+        "data_type": "boolean",
+        "ui_control": "switch",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "true",
+        "options": [],
+        "validation": {},
+        "display_order": 54,
+    },
 }
 
 
@@ -707,13 +833,15 @@ def get_field_definition(key: str, value_hint: Optional[str] = None) -> Dict[str
     return field
 
 
-def build_schema_response() -> Dict[str, Any]:
+def build_schema_response(allowed_keys: Optional[Set[str]] = None) -> Dict[str, Any]:
     """Build schema payload grouped by category."""
     category_map: Dict[str, Dict[str, Any]] = {}
     for category in get_category_definitions():
         category_map[category["category"]] = {**category, "fields": []}
 
     for key in sorted(_FIELD_DEFINITIONS.keys()):
+        if allowed_keys is not None and key not in allowed_keys:
+            continue
         field = get_field_definition(key)
         category_map[field["category"]]["fields"].append(field)
 
@@ -757,19 +885,10 @@ def _infer_category(key: str) -> str:
     ):
         return "data_source"
     if key.startswith((
-        "WECHAT",
-        "FEISHU",
         "TELEGRAM",
         "EMAIL",
-        "PUSHOVER",
-        "PUSHPLUS",
-        "SERVERCHAN",
-        "DINGTALK",
         "DISCORD",
-        "CUSTOM_WEBHOOK",
-        "WECOM",
-        "ASTRBOT",
-    )) or "WEBHOOK" in key:
+    )):
         return "notification"
     if key.startswith(("LOG_", "SCHEDULE_", "WEBUI_", "HTTP_", "HTTPS_", "MAX_", "DEBUG")):
         return "system"
@@ -798,7 +917,7 @@ def _infer_data_type(key: str, value_hint: Optional[str]) -> str:
     except (TypeError, ValueError):
         pass
 
-    if key in {"STOCK_LIST", "EMAIL_RECEIVERS", "CUSTOM_WEBHOOK_URLS"}:
+    if key in {"STOCK_LIST", "EMAIL_RECEIVERS"}:
         return "array"
     return "string"
 

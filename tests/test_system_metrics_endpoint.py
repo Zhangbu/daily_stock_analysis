@@ -26,7 +26,11 @@ class SystemMetricsEndpointTestCase(unittest.TestCase):
         payload = get_system_metrics()
 
         self.assertIn("demo", payload.observability)
+        self.assertIn("p50_duration_ms", payload.observability["demo"])
+        self.assertIn("p95_duration_ms", payload.observability["demo"])
         self.assertIn("demo", payload.observability_trends)
+        self.assertGreaterEqual(payload.observability_trends["demo"][0].p50_duration_ms, 0)
+        self.assertGreaterEqual(payload.observability_trends["demo"][0].p95_duration_ms, 0)
         self.assertIsInstance(payload.observability_by_provider, dict)
         self.assertIsInstance(payload.recent_slowest, list)
         self.assertIn("market_data", payload.cache)

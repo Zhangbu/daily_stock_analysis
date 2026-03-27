@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class MarketSyncRunRequest(BaseModel):
-    markets: List[str] = Field(default_factory=list, description="Markets to sync: cn/us")
+    markets: List[str] = Field(default_factory=list, description="Markets to sync: cn/hk/us")
 
 
 class MarketSyncStatusResponse(BaseModel):

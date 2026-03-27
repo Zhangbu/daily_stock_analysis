@@ -18,6 +18,107 @@ from src.core.config_registry import (
 
 logger = logging.getLogger(__name__)
 
+_DEPRECATED_NOTIFICATION_KEYS: Set[str] = {
+    "WECHAT_WEBHOOK_URL",
+    "FEISHU_WEBHOOK_URL",
+    "PUSHOVER_USER_KEY",
+    "PUSHOVER_API_TOKEN",
+    "PUSHPLUS_TOKEN",
+    "PUSHPLUS_TOPIC",
+    "SERVERCHAN3_SENDKEY",
+    "CUSTOM_WEBHOOK_URLS",
+    "CUSTOM_WEBHOOK_BEARER_TOKEN",
+    "WEBHOOK_VERIFY_SSL",
+    "ASTRBOT_URL",
+    "ASTRBOT_TOKEN",
+}
+
+_LOW_USAGE_LEGACY_KEYS: Set[str] = {
+    "AKSHARE_SLEEP_MIN",
+    "AKSHARE_SLEEP_MAX",
+    "TUSHARE_RATE_LIMIT_PER_MINUTE",
+    "RETRY_BASE_DELAY",
+    "RETRY_MAX_DELAY",
+    "TELEGRAM_WEBHOOK_SECRET",
+    "WECOM_CORPID",
+    "WECOM_TOKEN",
+    "WECOM_ENCODING_AES_KEY",
+    "WECOM_AGENT_ID",
+    "WEBUI_HOST",
+    "WEBUI_PORT",
+    "ASTRBOT_TOKEN",
+    "CUSTOM_WEBHOOK_BEARER_TOKEN",
+    "PUSHPLUS_TOPIC",
+}
+
+_CORE_PROFILE_KEYS: Set[str] = {
+    "STOCK_LIST",
+    "US_STOCK_LIST",
+    "TUSHARE_TOKEN",
+    "GEMINI_API_KEY",
+    "GEMINI_MODEL",
+    "GEMINI_MODEL_FALLBACK",
+    "GEMINI_TEMPERATURE",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_TEMPERATURE",
+    "ANTHROPIC_MAX_TOKENS",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "OPENAI_VISION_MODEL",
+    "OPENAI_TEMPERATURE",
+    "TAVILY_API_KEYS",
+    "SERPAPI_API_KEYS",
+    "BRAVE_API_KEYS",
+    "NEWS_MAX_AGE_DAYS",
+    "BIAS_THRESHOLD",
+    "ANALYSIS_STALE_DAYS_LIMIT",
+    "REALTIME_SOURCE_PRIORITY",
+    "ENABLE_REALTIME_QUOTE",
+    "ENABLE_REALTIME_TECHNICAL_INDICATORS",
+    "AGENT_MODE",
+    "AGENT_MAX_STEPS",
+    "AGENT_SKILLS",
+    "AGENT_STRATEGY_DIR",
+    "ENABLE_AGENT_API",
+    "ENABLE_BACKTEST_API",
+    "ENABLE_STRATEGY_BACKTEST_API",
+    "ENABLE_MARKET_SYNC_API",
+    "ENABLE_SCREENING_API",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "TELEGRAM_MESSAGE_THREAD_ID",
+    "TELEGRAM_VERIFY_SSL",
+    "TELEGRAM_CA_BUNDLE",
+    "EMAIL_SENDER",
+    "EMAIL_PASSWORD",
+    "EMAIL_RECEIVERS",
+    "EMAIL_SENDER_NAME",
+    "DISCORD_BOT_TOKEN",
+    "DISCORD_MAIN_CHANNEL_ID",
+    "DISCORD_WEBHOOK_URL",
+    "SINGLE_STOCK_NOTIFY",
+    "REPORT_TYPE",
+    "REPORT_SUMMARY_ONLY",
+    "ANALYSIS_DELAY",
+    "MERGE_EMAIL_NOTIFICATION",
+    "DATABASE_PATH",
+    "MAX_WORKERS",
+    "TRADING_DAY_CHECK_ENABLED",
+    "MARKET_DATA_CACHE_TTL",
+    "MARKET_SYNC_ENABLED",
+    "MARKET_SYNC_ON_STARTUP",
+    "MARKET_SYNC_MARKETS",
+    "MARKET_SYNC_A_SHARE_FULL_ENABLED",
+    "MARKET_SYNC_HISTORICAL_DAYS",
+    "MARKET_SYNC_INCREMENTAL_DAYS",
+    "MARKET_SYNC_SLEEP_SECONDS",
+    "MARKET_SYNC_MAX_CODES_PER_RUN",
+    "ARTICLE_CONTENT_CACHE_TTL",
+    "OBSERVABILITY_WARN_LATENCY_MS",
+}
+
 
 class ConfigValidationError(Exception):
     """Raised when one or more submitted fields fail validation."""
@@ -41,15 +142,26 @@ class SystemConfigService:
     def __init__(self, manager: Optional[ConfigManager] = None):
         self._manager = manager or ConfigManager()
 
-    def get_schema(self) -> Dict[str, Any]:
+    def get_schema(self, profile: str = "full") -> Dict[str, Any]:
         """Return grouped schema metadata for UI rendering."""
+        normalized = self._normalize_profile(profile)
+        if normalized == "core":
+            return build_schema_response(allowed_keys=_CORE_PROFILE_KEYS)
         return build_schema_response()
 
-    def get_config(self, include_schema: bool = True, mask_token: str = "******") -> Dict[str, Any]:
+    def get_config(
+        self,
+        include_schema: bool = True,
+        mask_token: str = "******",
+        profile: str = "full",
+    ) -> Dict[str, Any]:
         """Return current config values without server-side secret masking."""
+        normalized = self._normalize_profile(profile)
         config_map = self._manager.read_config_map()
         registered_keys = set(get_registered_field_keys())
-        all_keys = set(config_map.keys()) | registered_keys
+        all_keys = (set(config_map.keys()) | registered_keys) - _DEPRECATED_NOTIFICATION_KEYS
+        if normalized == "core":
+            all_keys = all_keys & _CORE_PROFILE_KEYS
 
         category_orders = {
             item["category"]: item["display_order"]
@@ -89,6 +201,11 @@ class SystemConfigService:
             "items": items,
             "updated_at": self._manager.get_updated_at(),
         }
+
+    @staticmethod
+    def _normalize_profile(profile: str) -> str:
+        value = (profile or "full").strip().lower()
+        return "core" if value == "core" else "full"
 
     def validate(self, items: Sequence[Dict[str, str]], mask_token: str = "******") -> Dict[str, Any]:
         """Validate submitted items without writing to `.env`."""
@@ -174,8 +291,38 @@ class SystemConfigService:
             updated_map[key] = value
             effective_map[key] = value
             issues.extend(self._validate_value(key=key, value=value, field_schema=field_schema))
+            issues.extend(self._collect_key_deprecation_warnings(key=key, value=value))
 
         issues.extend(self._validate_cross_field(effective_map=effective_map, updated_keys=set(updated_map.keys())))
+        return issues
+
+    @staticmethod
+    def _collect_key_deprecation_warnings(key: str, value: str) -> List[Dict[str, Any]]:
+        """Emit non-blocking warnings for deprecated or legacy config keys."""
+        issues: List[Dict[str, Any]] = []
+        normalized_key = key.upper()
+        if normalized_key in _DEPRECATED_NOTIFICATION_KEYS:
+            issues.append(
+                {
+                    "key": normalized_key,
+                    "code": "deprecated_key",
+                    "message": "This notification key is deprecated in streamlined mode and may be ignored.",
+                    "severity": "warning",
+                    "expected": "email/telegram/discord keys",
+                    "actual": value,
+                }
+            )
+        elif normalized_key in _LOW_USAGE_LEGACY_KEYS:
+            issues.append(
+                {
+                    "key": normalized_key,
+                    "code": "legacy_key",
+                    "message": "This key is legacy/low-usage and may be removed in a future cleanup.",
+                    "severity": "warning",
+                    "expected": "core profile keys",
+                    "actual": value,
+                }
+            )
         return issues
 
     @staticmethod

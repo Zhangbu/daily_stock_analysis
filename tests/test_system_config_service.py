@@ -81,6 +81,20 @@ class SystemConfigServiceTestCase(unittest.TestCase):
                 reload_now=False,
             )
 
+    def test_validate_warns_for_deprecated_notification_key(self) -> None:
+        validation = self.service.validate(
+            items=[{"key": "WECHAT_WEBHOOK_URL", "value": "https://example.com/hook"}]
+        )
+        self.assertTrue(validation["valid"])
+        self.assertTrue(
+            any(issue["code"] == "deprecated_key" and issue["severity"] == "warning" for issue in validation["issues"])
+        )
+
+    def test_validate_warns_for_legacy_low_usage_key(self) -> None:
+        validation = self.service.validate(items=[{"key": "WEBUI_PORT", "value": "8000"}])
+        self.assertTrue(validation["valid"])
+        self.assertTrue(any(issue["code"] == "legacy_key" and issue["severity"] == "warning" for issue in validation["issues"]))
+
 
 if __name__ == "__main__":
     unittest.main()

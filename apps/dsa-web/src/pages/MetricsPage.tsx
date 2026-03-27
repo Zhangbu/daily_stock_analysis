@@ -35,6 +35,8 @@ const TrendList: React.FC<{ title: string; items: Record<string, Array<MetricBuc
                   <div className="mb-1 text-slate-400">{formatBucketTime(point.bucketTs)}</div>
                   <div>count: {formatValue(point.count)}</div>
                   <div>avg ms: {formatValue(point.avgDurationMs)}</div>
+                  <div>p50 ms: {formatValue(point.p50DurationMs)}</div>
+                  <div>p95 ms: {formatValue(point.p95DurationMs)}</div>
                   <div>ok: {formatValue(point.success)}</div>
                   <div>err: {formatValue(point.error)}</div>
                 </div>
@@ -42,7 +44,7 @@ const TrendList: React.FC<{ title: string; items: Record<string, Array<MetricBuc
             </div>
             {latest ? (
               <div className="mt-3 text-xs text-cyan-300">
-                当前窗口 avg {formatValue(latest.avgDurationMs)} ms / max {formatValue(latest.maxDurationMs)} ms
+                当前窗口 avg {formatValue(latest.avgDurationMs)} ms / p95 {formatValue(latest.p95DurationMs)} ms / max {formatValue(latest.maxDurationMs)} ms
               </div>
             ) : null}
           </div>
@@ -70,6 +72,8 @@ const MetricList: React.FC<{ title: string; items: Record<string, MetricBucket> 
             <span>success: {formatValue(metric.success)}</span>
             <span>error: {formatValue(metric.error)}</span>
             <span>avg ms: {formatValue(metric.avgDurationMs)}</span>
+            <span>p50 ms: {formatValue(metric.p50DurationMs)}</span>
+            <span>p95 ms: {formatValue(metric.p95DurationMs)}</span>
             <span>max ms: {formatValue(metric.maxDurationMs)}</span>
             <span>hits: {formatValue(metric.hits ?? metric.cacheHits)}</span>
             <span>misses: {formatValue(metric.misses ?? metric.cacheMisses)}</span>

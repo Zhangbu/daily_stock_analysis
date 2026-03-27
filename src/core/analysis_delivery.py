@@ -7,7 +7,7 @@ import logging
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
-from src.notification import NotificationChannel
+from src.notification_channels import NotificationChannel
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +48,14 @@ class AnalysisDeliveryService:
                 logger.info("通知渠道未配置，跳过推送")
                 return
 
-            channels = self.notifier.get_available_channels()
             context_success = self.notifier.send_to_context(report)
-            wechat_success = self._send_wechat_dashboard(results, channels)
-            non_wechat_success = self._send_non_wechat_channels(results, report, channels)
+            channel_success = self._send_available_channels(
+                results=results,
+                report=report,
+                channels=self.notifier.get_available_channels(),
+            )
 
-            success = wechat_success or non_wechat_success or context_success
+            success = channel_success or context_success
             if success:
                 logger.info("决策仪表盘推送成功")
             else:
@@ -61,55 +63,31 @@ class AnalysisDeliveryService:
         except Exception as exc:
             logger.error(f"发送通知失败: {exc}")
 
-    def _send_wechat_dashboard(self, results: List, channels: List[NotificationChannel]) -> bool:
-        """Send the compact dashboard to WeChat if configured."""
-        if NotificationChannel.WECHAT not in channels:
-            return False
-
-        dashboard_content = self.notifier.generate_wechat_dashboard(results)
-        logger.info(f"企业微信仪表盘长度: {len(dashboard_content)} 字符")
-        logger.debug(f"企业微信推送内容:\n{dashboard_content}")
-        return self.notifier.send_to_wechat(dashboard_content)
-
-    def _send_non_wechat_channels(
+    def _send_available_channels(
         self,
         results: List,
         report: str,
         channels: List[NotificationChannel],
     ) -> bool:
-        """Send the full report to non-WeChat channels."""
-        non_wechat_success = False
+        """Send the full report to available channels (telegram/email/discord)."""
+        channel_success = False
         stock_email_groups = getattr(self.config, "stock_email_groups", []) or []
 
         for channel in channels:
-            if channel == NotificationChannel.WECHAT:
-                continue
-            if channel == NotificationChannel.FEISHU:
-                non_wechat_success = self.notifier.send_to_feishu(report) or non_wechat_success
-            elif channel == NotificationChannel.TELEGRAM:
-                non_wechat_success = self.notifier.send_to_telegram(report) or non_wechat_success
+            if channel == NotificationChannel.TELEGRAM:
+                channel_success = self.notifier.send_to_telegram(report) or channel_success
             elif channel == NotificationChannel.EMAIL:
-                non_wechat_success = self._send_email_groups(
+                channel_success = self._send_email_groups(
                     results=results,
                     report=report,
                     stock_email_groups=stock_email_groups,
-                ) or non_wechat_success
-            elif channel == NotificationChannel.CUSTOM:
-                non_wechat_success = self.notifier.send_to_custom(report) or non_wechat_success
-            elif channel == NotificationChannel.PUSHPLUS:
-                non_wechat_success = self.notifier.send_to_pushplus(report) or non_wechat_success
-            elif channel == NotificationChannel.SERVERCHAN3:
-                non_wechat_success = self.notifier.send_to_serverchan3(report) or non_wechat_success
+                ) or channel_success
             elif channel == NotificationChannel.DISCORD:
-                non_wechat_success = self.notifier.send_to_discord(report) or non_wechat_success
-            elif channel == NotificationChannel.PUSHOVER:
-                non_wechat_success = self.notifier.send_to_pushover(report) or non_wechat_success
-            elif channel == NotificationChannel.ASTRBOT:
-                non_wechat_success = self.notifier.send_to_astrbot(report) or non_wechat_success
+                channel_success = self.notifier.send_to_discord(report) or channel_success
             else:
-                logger.warning(f"未知通知渠道: {channel}")
+                logger.warning(f"精简模式下忽略通知渠道: {channel}")
 
-        return non_wechat_success
+        return channel_success
 
     def _send_email_groups(
         self,

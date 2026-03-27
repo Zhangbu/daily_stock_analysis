@@ -94,6 +94,58 @@ class SystemConfigApiTestCase(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["error"], "config_version_conflict")
 
+    def test_get_feature_flags_returns_api_toggles(self) -> None:
+        response = self.client.get("/api/v1/system/features")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("agent_api", payload)
+        self.assertIn("backtest_api", payload)
+        self.assertIn("strategy_backtest_api", payload)
+        self.assertIn("market_sync_api", payload)
+        self.assertIn("screening_api", payload)
+
+    def test_get_config_hides_deprecated_notification_keys(self) -> None:
+        # Append deprecated keys into env file to verify API-level filtering.
+        self.env_path.write_text(
+            self.env_path.read_text(encoding="utf-8")
+            + "WECHAT_WEBHOOK_URL=https://example.com/hook\n"
+            + "PUSHPLUS_TOKEN=deprecated-token\n",
+            encoding="utf-8",
+        )
+        Config.reset_instance()
+
+        response = self.client.get("/api/v1/system/config")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        keys = {item["key"] for item in payload["items"]}
+        self.assertNotIn("WECHAT_WEBHOOK_URL", keys)
+        self.assertNotIn("PUSHPLUS_TOKEN", keys)
+
+    def test_get_config_core_profile_returns_slimmed_keys(self) -> None:
+        response = self.client.get("/api/v1/system/config?profile=core")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        keys = {item["key"] for item in payload["items"]}
+        self.assertIn("STOCK_LIST", keys)
+        self.assertIn("OPENAI_MODEL", keys)
+        self.assertIn("EMAIL_SENDER", keys)
+        self.assertIn("MARKET_SYNC_MARKETS", keys)
+        self.assertIn("ENABLE_REALTIME_QUOTE", keys)
+        self.assertNotIn("LOG_LEVEL", keys)
+
+    def test_get_schema_core_profile_returns_slimmed_fields(self) -> None:
+        response = self.client.get("/api/v1/system/config/schema?profile=core")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        keys = {
+            field["key"]
+            for category in payload["categories"]
+            for field in category["fields"]
+        }
+        self.assertIn("STOCK_LIST", keys)
+        self.assertIn("ENABLE_AGENT_API", keys)
+        self.assertNotIn("LOG_LEVEL", keys)
+
 
 if __name__ == "__main__":
     unittest.main()

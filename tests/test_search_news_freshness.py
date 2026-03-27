@@ -54,6 +54,19 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         service._providers[0].search = mock_search
         return service, mock_search
 
+    def _create_service_with_two_mock_providers(self, news_max_age_days: int = 3):
+        """Create SearchService with two providers for fallback behavior tests."""
+        service = SearchService(
+            bocha_keys=["dummy_key_1"],
+            tavily_keys=["dummy_key_2"],
+            news_max_age_days=news_max_age_days,
+        )
+        first_search = MagicMock()
+        second_search = MagicMock()
+        service._providers[0].search = first_search
+        service._providers[1].search = second_search
+        return service, first_search, second_search
+
     @patch("src.search_service.datetime")
     def test_search_stock_news_days_monday_limit_by_news_max_age(
         self, mock_dt: MagicMock
@@ -160,3 +173,27 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(mock_search.call_count, 1)
         self.assertTrue(all(result.success for result in results))
+
+    def test_search_comprehensive_intel_fallbacks_to_next_provider_per_dimension(self) -> None:
+        """When provider-1 fails, comprehensive search should fallback to provider-2."""
+        service, first_search, second_search = self._create_service_with_two_mock_providers(news_max_age_days=2)
+        first_search.return_value = SearchResponse(
+            query="q",
+            results=[],
+            provider="P1",
+            success=False,
+            error_message="p1 down",
+        )
+        second_search.return_value = _fake_search_response()
+
+        with patch("src.search_service.time.sleep"):
+            results = service.search_comprehensive_intel(
+                stock_code="600519",
+                stock_name="贵州茅台",
+                max_searches=1,
+            )
+
+        self.assertIn("latest_news", results)
+        self.assertTrue(results["latest_news"].success)
+        self.assertGreaterEqual(first_search.call_count, 1)
+        self.assertGreaterEqual(second_search.call_count, 1)

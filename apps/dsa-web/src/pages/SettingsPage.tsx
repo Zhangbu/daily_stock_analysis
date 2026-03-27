@@ -10,6 +10,45 @@ import {
 } from '../components/settings';
 import { getCategoryDescriptionZh, getCategoryTitleZh } from '../utils/systemConfigI18n';
 
+type SettingsHint = {
+  title: string;
+  body: string;
+};
+
+function getCategoryHints(category: string): SettingsHint[] {
+  if (category === 'data_source') {
+    return [
+      {
+        title: 'Yahoo Finance 兜底',
+        body: '若港股或美股实时行情不稳定，可在 REALTIME_SOURCE_PRIORITY 中加入 yfinance，例如：tencent,akshare_sina,efinance,akshare_em,yfinance。',
+      },
+      {
+        title: '港股后台同步',
+        body: 'MARKET_SYNC_MARKETS 现在支持 cn,hk,us。港股同步按 STOCK_LIST 中的港股代码执行，不需要额外建一套港股列表。',
+      },
+      {
+        title: '旧数据自动降级',
+        body: '可通过 ANALYSIS_STALE_DAYS_LIMIT 控制“数据过旧自动观望”的阈值，减少历史数据滞后导致的误判。',
+      },
+    ];
+  }
+
+  if (category === 'notification') {
+    return [
+      {
+        title: 'Telegram 证书报错优先处理方式',
+        body: '若看到 CERTIFICATE_VERIFY_FAILED，优先填写 TELEGRAM_CA_BUNDLE；仅在可信环境临时排障时，才建议把 TELEGRAM_VERIFY_SSL 设为 false。',
+      },
+      {
+        title: 'Topic 群组推送',
+        body: '如果 Telegram 群组启用了话题，TELEGRAM_MESSAGE_THREAD_ID 可把消息发到指定 Topic。',
+      },
+    ];
+  }
+
+  return [];
+}
+
 const SettingsPage: React.FC = () => {
   const { passwordChangeable } = useAuth();
   const {
@@ -54,6 +93,7 @@ const SettingsPage: React.FC = () => {
   }, [clearToast, toast]);
 
   const activeItems = itemsByCategory[activeCategory] || [];
+  const activeHints = getCategoryHints(activeCategory);
 
   return (
     <div className="min-h-screen px-4 pb-6 pt-4 md:px-6">
@@ -138,6 +178,19 @@ const SettingsPage: React.FC = () => {
           </aside>
 
           <section className="space-y-3 rounded-2xl border border-white/8 bg-card/60 p-4 backdrop-blur-sm">
+            {activeHints.length ? (
+              <div className="rounded-xl border border-cyan/20 bg-cyan/5 p-4">
+                <p className="mb-3 text-xs uppercase tracking-wide text-cyan">配置提示</p>
+                <div className="space-y-3">
+                  {activeHints.map((hint) => (
+                    <div key={hint.title} className="rounded-lg border border-white/8 bg-elevated/40 p-3">
+                      <p className="text-sm font-medium text-white">{hint.title}</p>
+                      <p className="mt-1 text-xs leading-5 text-secondary">{hint.body}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {activeCategory === 'base' ? (
               <div className="space-y-3">
                 <ImageStockExtractor

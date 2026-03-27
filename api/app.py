@@ -41,7 +41,11 @@ async def app_lifespan(app: FastAPI):
     app.state.system_config_service = SystemConfigService()
     app.state.market_data_sync_service = MarketDataSyncService()
     config = get_config()
-    if config.market_sync_enabled and config.market_sync_on_startup:
+    if (
+        config.enable_market_sync_api
+        and config.market_sync_enabled
+        and config.market_sync_on_startup
+    ):
         app.state.market_data_sync_service.start_background_sync()
     try:
         yield

@@ -18,6 +18,8 @@ export interface MetricBucket {
   totalDurationMs?: number;
   maxDurationMs?: number;
   avgDurationMs?: number;
+  p50DurationMs?: number;
+  p95DurationMs?: number;
   hitRatePct?: number;
 }
 

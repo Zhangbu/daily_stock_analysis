@@ -93,12 +93,19 @@ class Config:
     # === 新闻与分析筛选配置 ===
     news_max_age_days: int = 3   # 新闻最大时效（天）
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
+    analysis_stale_days_limit: int = 2  # 分析允许的数据最大滞后天数（超过将自动降级为观望）
 
     # === Agent 模式配置 ===
     agent_mode: bool = False
     agent_max_steps: int = 10
     agent_skills: List[str] = field(default_factory=list)
     agent_strategy_dir: Optional[str] = None
+    # Optional API route toggles (Phase 2 modularization)
+    enable_agent_api: bool = True
+    enable_backtest_api: bool = True
+    enable_strategy_backtest_api: bool = True
+    enable_market_sync_api: bool = True
+    enable_screening_api: bool = True
 
     # === 通知配置（可同时配置多个，全部推送）===
     
@@ -112,6 +119,8 @@ class Config:
     telegram_bot_token: Optional[str] = None  # Bot Token（@BotFather 获取）
     telegram_chat_id: Optional[str] = None  # Chat ID
     telegram_message_thread_id: Optional[str] = None  # Topic ID (Message Thread ID) for groups
+    telegram_verify_ssl: bool = True  # Telegram HTTPS 证书校验，false 仅限可信内网排障
+    telegram_ca_bundle: Optional[str] = None  # Custom CA bundle path for Telegram requests
     
     # 邮件配置（只需邮箱和授权码，SMTP 自动识别）
     email_sender: Optional[str] = None  # 发件人邮箱
@@ -255,9 +264,6 @@ class Config:
     # Warn threshold for slow operations in logs
     observability_warn_latency_ms: int = 2000
 
-    # Discord 机器人状态
-    discord_bot_status: str = "A股智能分析 | /help"
-
     # === 流控配置（防封禁关键参数）===
     # Akshare 请求间隔范围（秒）
     akshare_sleep_min: float = 2.0
@@ -335,6 +341,13 @@ class Config:
         # 确保环境变量已加载
         setup_env()
 
+        def _clean_env_str(name: str) -> Optional[str]:
+            raw = os.getenv(name)
+            if raw is None:
+                return None
+            cleaned = raw.strip().strip('"').strip("'").strip()
+            return cleaned or None
+
         # === 智能代理配置 (关键修复) ===
         # 如果配置了代理，自动设置 NO_PROXY 以排除国内数据源，避免行情获取失败
         http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
@@ -401,6 +414,9 @@ class Config:
 
         brave_keys_str = os.getenv('BRAVE_API_KEYS', '')
         brave_api_keys = [k.strip() for k in brave_keys_str.split(',') if k.strip()]
+        aihubmix_key = _clean_env_str('AIHUBMIX_KEY')
+        openai_key = _clean_env_str('OPENAI_API_KEY')
+        openai_base_url = _clean_env_str('OPENAI_BASE_URL')
 
         # 企微消息类型与最大字节数逻辑
         wechat_msg_type = os.getenv('WECHAT_MSG_TYPE', 'markdown')
@@ -440,9 +456,9 @@ class Config:
             # base_url is auto-set to aihubmix.com/v1 when AIHUBMIX_KEY is used and no explicit
             # OPENAI_BASE_URL override is provided.
             # Model names match upstream (e.g. gemini-3.1-pro-preview, gpt-4o, gpt-4o-free, deepseek-chat).
-            openai_api_key=os.getenv('AIHUBMIX_KEY') or os.getenv('OPENAI_API_KEY') or None,
-            openai_base_url=os.getenv('OPENAI_BASE_URL') or (
-                'https://aihubmix.com/v1' if os.getenv('AIHUBMIX_KEY') else None
+            openai_api_key=aihubmix_key or openai_key,
+            openai_base_url=openai_base_url or (
+                'https://aihubmix.com/v1' if aihubmix_key else None
             ),  # noqa: E501
             openai_model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
             openai_vision_model=os.getenv('OPENAI_VISION_MODEL') or None,
@@ -453,15 +469,23 @@ class Config:
             serpapi_keys=serpapi_keys,
             news_max_age_days=max(1, int(os.getenv('NEWS_MAX_AGE_DAYS', '3'))),
             bias_threshold=max(1.0, float(os.getenv('BIAS_THRESHOLD', '5.0'))),
+            analysis_stale_days_limit=max(0, int(os.getenv('ANALYSIS_STALE_DAYS_LIMIT', '2'))),
             agent_mode=os.getenv('AGENT_MODE', 'false').lower() == 'true',
             agent_max_steps=int(os.getenv('AGENT_MAX_STEPS', '10')),
             agent_skills=[s.strip() for s in os.getenv('AGENT_SKILLS', '').split(',') if s.strip()],
             agent_strategy_dir=os.getenv('AGENT_STRATEGY_DIR'),
+            enable_agent_api=os.getenv('ENABLE_AGENT_API', 'true').lower() == 'true',
+            enable_backtest_api=os.getenv('ENABLE_BACKTEST_API', 'true').lower() == 'true',
+            enable_strategy_backtest_api=os.getenv('ENABLE_STRATEGY_BACKTEST_API', 'true').lower() == 'true',
+            enable_market_sync_api=os.getenv('ENABLE_MARKET_SYNC_API', 'true').lower() == 'true',
+            enable_screening_api=os.getenv('ENABLE_SCREENING_API', 'true').lower() == 'true',
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
             feishu_webhook_url=os.getenv('FEISHU_WEBHOOK_URL'),
             telegram_bot_token=os.getenv('TELEGRAM_BOT_TOKEN'),
             telegram_chat_id=os.getenv('TELEGRAM_CHAT_ID'),
             telegram_message_thread_id=os.getenv('TELEGRAM_MESSAGE_THREAD_ID'),
+            telegram_verify_ssl=os.getenv('TELEGRAM_VERIFY_SSL', 'true').lower() == 'true',
+            telegram_ca_bundle=os.getenv('TELEGRAM_CA_BUNDLE') or None,
             email_sender=os.getenv('EMAIL_SENDER'),
             email_sender_name=os.getenv('EMAIL_SENDER_NAME', 'daily_stock_analysis股票分析助手'),
             email_password=os.getenv('EMAIL_PASSWORD'),
@@ -566,6 +590,7 @@ class Config:
             # - akshare_sina: 新浪财经，基本行情稳定，但无量比
             # - efinance/akshare_em: 东财全量接口，数据最全但容易被封
             # - tushare: Tushare Pro，需要2000积分，数据全面
+            # - yfinance: Yahoo Finance，适合作为港股/美股或跨市场兜底
             realtime_source_priority=cls._resolve_realtime_source_priority(),
             realtime_cache_ttl=int(os.getenv('REALTIME_CACHE_TTL', '600')),
             market_data_cache_ttl=int(os.getenv('MARKET_DATA_CACHE_TTL', '21600')),
@@ -574,7 +599,7 @@ class Config:
             market_sync_markets=[
                 m.strip().lower()
                 for m in os.getenv('MARKET_SYNC_MARKETS', 'cn').split(',')
-                if m.strip().lower() in {'cn', 'us'}
+                if m.strip().lower() in {'cn', 'hk', 'us'}
             ] or ['cn'],
             market_sync_a_share_full_enabled=os.getenv('MARKET_SYNC_A_SHARE_FULL_ENABLED', 'false').lower() == 'true',
             market_sync_historical_days=int(os.getenv('MARKET_SYNC_HISTORICAL_DAYS', '365')),
@@ -723,14 +748,8 @@ class Config:
         
         # 检查通知配置
         has_notification = (
-            self.wechat_webhook_url or
-            self.feishu_webhook_url or
             (self.telegram_bot_token and self.telegram_chat_id) or
             (self.email_sender and self.email_password) or
-            (self.pushover_user_key and self.pushover_api_token) or
-            self.pushplus_token or
-            self.serverchan3_sendkey or
-            self.custom_webhook_urls or
             (self.discord_bot_token and self.discord_main_channel_id) or
             self.discord_webhook_url
         )
@@ -748,15 +767,27 @@ class Config:
                 "anthropic_api_key", "anthropic_model", "anthropic_temperature", "anthropic_max_tokens",
                 "openai_api_key", "openai_base_url", "openai_model", "openai_vision_model", "openai_temperature",
             ],
-            "search": ["bocha_api_keys", "tavily_api_keys", "brave_api_keys", "serpapi_keys", "news_max_age_days"],
+            "search": [
+                "bocha_api_keys",
+                "tavily_api_keys",
+                "brave_api_keys",
+                "serpapi_keys",
+                "news_max_age_days",
+                "analysis_stale_days_limit",
+            ],
             "agent": ["agent_mode", "agent_max_steps", "agent_skills", "agent_strategy_dir"],
+            "api_features": [
+                "enable_agent_api",
+                "enable_backtest_api",
+                "enable_strategy_backtest_api",
+                "enable_market_sync_api",
+                "enable_screening_api",
+            ],
             "notification": [
-                "wechat_webhook_url", "feishu_webhook_url", "telegram_bot_token", "telegram_chat_id",
+                "telegram_bot_token", "telegram_chat_id",
                 "telegram_message_thread_id", "email_sender", "email_sender_name", "email_receivers",
-                "pushover_user_key", "pushover_api_token", "pushplus_token", "pushplus_topic",
-                "serverchan3_sendkey", "custom_webhook_urls", "custom_webhook_bearer_token",
                 "discord_bot_token", "discord_main_channel_id", "discord_webhook_url",
-                "astrbot_token", "astrbot_url", "single_stock_notify", "report_type",
+                "single_stock_notify", "report_type",
                 "report_summary_only", "analysis_delay", "merge_email_notification",
             ],
             "runtime": [

@@ -12,9 +12,11 @@ API v1 路由聚合
 from fastapi import APIRouter
 
 from api.v1.endpoints import analysis, auth, history, stocks, backtest, strategy_backtest, system_config, system_metrics, market_sync, agent, screening
+from src.config import get_config
 
 # 创建 v1 版本主路由
 router = APIRouter(prefix="/api/v1")
+config = get_config()
 
 router.include_router(
     auth.router,
@@ -22,11 +24,12 @@ router.include_router(
     tags=["Auth"]
 )
 
-router.include_router(
-    agent.router,
-    prefix="/agent",
-    tags=["Agent"]
-)
+if config.enable_agent_api:
+    router.include_router(
+        agent.router,
+        prefix="/agent",
+        tags=["Agent"]
+    )
 
 router.include_router(
     analysis.router,
@@ -46,17 +49,19 @@ router.include_router(
     tags=["Stocks"]
 )
 
-router.include_router(
-    backtest.router,
-    prefix="/backtest",
-    tags=["Backtest"]
-)
+if config.enable_backtest_api:
+    router.include_router(
+        backtest.router,
+        prefix="/backtest",
+        tags=["Backtest"]
+    )
 
-router.include_router(
-    strategy_backtest.router,
-    prefix="/strategy-backtest",
-    tags=["StrategyBacktest"]
-)
+if config.enable_strategy_backtest_api:
+    router.include_router(
+        strategy_backtest.router,
+        prefix="/strategy-backtest",
+        tags=["StrategyBacktest"]
+    )
 
 router.include_router(
     system_config.router,
@@ -70,14 +75,16 @@ router.include_router(
     tags=["SystemMetrics"]
 )
 
-router.include_router(
-    market_sync.router,
-    prefix="/system",
-    tags=["MarketSync"]
-)
+if config.enable_market_sync_api:
+    router.include_router(
+        market_sync.router,
+        prefix="/system",
+        tags=["MarketSync"]
+    )
 
-router.include_router(
-    screening.router,
-    prefix="/screening",
-    tags=["Screening"]
-)
+if config.enable_screening_api:
+    router.include_router(
+        screening.router,
+        prefix="/screening",
+        tags=["Screening"]
+    )

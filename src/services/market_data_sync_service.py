@@ -195,6 +195,8 @@ class MarketDataSyncService:
         """Resolve prioritized stock universe for one market."""
         if market == "cn":
             codes = self._get_cn_universe()
+        elif market == "hk":
+            codes = self._get_hk_universe()
         elif market == "us":
             codes = self._get_us_universe()
         else:
@@ -222,6 +224,10 @@ class MarketDataSyncService:
         watchlist = [code for code in self.config.stock_list if get_market_for_stock(code) == "us"]
         configured = [code for code in self.config.us_stock_list if code]
         return self._prioritize_codes(watchlist, configured)
+
+    def _get_hk_universe(self) -> List[str]:
+        """Build HK universe from watchlist only."""
+        return [code for code in self.config.stock_list if get_market_for_stock(code) == "hk"]
 
     def _fetch_cn_stock_list(self) -> Optional[pd.DataFrame]:
         """Fetch A-share stock universe from available providers."""
@@ -276,7 +282,7 @@ class MarketDataSyncService:
         result: List[str] = []
         for market in markets:
             normalized = str(market).strip().lower()
-            if normalized in {"cn", "us"} and normalized not in result:
+            if normalized in {"cn", "hk", "us"} and normalized not in result:
                 result.append(normalized)
         return result or ["cn"]
 

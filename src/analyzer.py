@@ -24,6 +24,12 @@ from src.llm.providers import (
     init_openai_fallback,
     switch_to_gemini_fallback_model,
 )
+from src.llm.retry_policy import (
+    clip_text as _clip_text,
+    is_ascii_encode_error as _is_ascii_encode_error,
+    is_non_retryable_llm_error as _is_non_retryable_llm_error,
+    safe_exception_text as _safe_exception_text,
+)
 from src.llm.result_parser import fix_json_string, parse_response, parse_text_response
 
 logger = logging.getLogger(__name__)
@@ -62,20 +68,6 @@ _ASCII_UNSAFE_TABLE_CHARS = {
 def _sanitize_ascii_unsafe_text(text: str) -> str:
     """Normalize common box-drawing characters for strict ASCII encoders."""
     return text.translate(_ASCII_UNSAFE_TABLE_CHARS)
-
-
-def _safe_exception_text(exc: Exception) -> str:
-    """Return an ASCII-safe exception string for logging."""
-    return str(exc).encode("ascii", errors="backslashreplace").decode("ascii")
-
-
-def _is_ascii_encode_error(error_text: str) -> bool:
-    lower_msg = error_text.lower()
-    return (
-        "ascii" in lower_msg
-        and "codec can't encode" in lower_msg
-        and "ordinal not in range(128)" in lower_msg
-    )
 
 
 # 股票名称映射（常见股票）
@@ -675,7 +667,6 @@ class GeminiAnalyzer:
         config = get_config()
         max_retries = config.gemini_max_retries
         base_delay = config.gemini_retry_delay
-        prompt_for_openai = prompt
         temperature = generation_config.get(
             'temperature', config.anthropic_temperature
         )
@@ -707,6 +698,12 @@ class GeminiAnalyzer:
                     return message.content[0].text
                 raise ValueError("Anthropic API returned empty response")
             except Exception as e:
+                if _is_non_retryable_llm_error(e):
+                    logger.error(
+                        "[Anthropic] 检测到不可恢复错误，跳过重试: %s",
+                        _clip_text(_safe_exception_text(e), 160),
+                    )
+                    raise
                 error_str = str(e)
                 is_rate_limit = (
                     '429' in error_str
@@ -741,15 +738,17 @@ class GeminiAnalyzer:
         config = get_config()
         max_retries = config.gemini_max_retries
         base_delay = config.gemini_retry_delay
+        system_prompt_for_openai = self.SYSTEM_PROMPT
+        prompt_for_openai = prompt
 
-        def _build_base_request_kwargs() -> dict:
+        def _build_base_request_kwargs(system_prompt_text: str, user_prompt_text: str) -> dict:
             # OpenAI-compatible path (DeepSeek, Qwen, etc.): add extra_body for thinking models
             model_name = self._current_model_name
             kwargs = {
                 "model": model_name,
                 "messages": [
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt_for_openai},
+                    {"role": "system", "content": system_prompt_text},
+                    {"role": "user", "content": user_prompt_text},
                 ],
                 "temperature": generation_config.get('temperature', config.openai_temperature),
             }
@@ -768,9 +767,10 @@ class GeminiAnalyzer:
         max_output_tokens = generation_config.get('max_output_tokens', 8192)
         model_name = self._current_model_name
         mode = self._token_param_mode.get(model_name, "max_tokens")
+        last_error: Optional[Exception] = None
 
         def _kwargs_with_mode(mode_value):
-            kwargs = _build_base_request_kwargs()
+            kwargs = _build_base_request_kwargs(system_prompt_for_openai, prompt_for_openai)
             if mode_value is not None:
                 kwargs[mode_value] = max_output_tokens
             return kwargs
@@ -780,7 +780,14 @@ class GeminiAnalyzer:
                 if attempt > 0:
                     delay = base_delay * (2 ** (attempt - 1))
                     delay = min(delay, 60)
-                    logger.info(f"[OpenAI] 第 {attempt + 1} 次重试，等待 {delay:.1f} 秒...")
+                    logger.info(
+                        "[OpenAI] 第 %d/%d 次重试，等待 %.1f 秒 (model=%s, token_param=%s)",
+                        attempt + 1,
+                        max_retries,
+                        delay,
+                        model_name,
+                        mode or "none",
+                    )
                     time.sleep(delay)
 
                 try:
@@ -788,10 +795,18 @@ class GeminiAnalyzer:
                 except Exception as e:
                     error_str = str(e)
                     if mode == "max_tokens" and _is_unsupported_param_error(error_str, "max_tokens"):
+                        logger.warning(
+                            "[OpenAI] 模型不支持 max_tokens，切换为 max_completion_tokens (model=%s)",
+                            model_name,
+                        )
                         mode = "max_completion_tokens"
                         self._token_param_mode[model_name] = mode
                         response = self._openai_client.chat.completions.create(**_kwargs_with_mode(mode))
                     elif mode == "max_completion_tokens" and _is_unsupported_param_error(error_str, "max_completion_tokens"):
+                        logger.warning(
+                            "[OpenAI] 模型不支持 max_completion_tokens，移除 token 参数重试 (model=%s)",
+                            model_name,
+                        )
                         mode = None
                         self._token_param_mode[model_name] = mode
                         response = self._openai_client.chat.completions.create(**_kwargs_with_mode(mode))
@@ -804,29 +819,74 @@ class GeminiAnalyzer:
                     raise ValueError("OpenAI API 返回空响应")
                     
             except Exception as e:
+                last_error = e
                 error_str = _safe_exception_text(e)
+                error_type = type(e).__name__
 
                 # Some OpenAI-compatible providers may reject box-drawing chars
                 # when an internal component incorrectly uses ASCII encoding.
                 if _is_ascii_encode_error(error_str):
+                    sanitized_system_prompt = _sanitize_ascii_unsafe_text(system_prompt_for_openai)
                     sanitized_prompt = _sanitize_ascii_unsafe_text(prompt_for_openai)
-                    if sanitized_prompt != prompt_for_openai:
+                    system_changed = sanitized_system_prompt != system_prompt_for_openai
+                    user_changed = sanitized_prompt != prompt_for_openai
+                    if (
+                        system_changed
+                        or user_changed
+                    ):
+                        system_prompt_for_openai = sanitized_system_prompt
                         prompt_for_openai = sanitized_prompt
-                        logger.warning("[OpenAI] Detected ASCII encoding issue in prompt, normalized table characters and retrying.")
+                        logger.warning(
+                            "[OpenAI] 检测到 ASCII 编码问题，已清洗请求文本后重试 "
+                            "(model=%s, system_changed=%s, user_changed=%s)",
+                            model_name,
+                            system_changed,
+                            user_changed,
+                        )
                         if attempt == max_retries - 1:
                             raise
                         continue
+                    logger.error(
+                        "[OpenAI] ASCII 编码错误无法通过文本清洗修复，跳过重试: %s",
+                        _clip_text(error_str, 160),
+                    )
+                    raise
+
+                if _is_non_retryable_llm_error(e):
+                    logger.error(
+                        "[OpenAI] 检测到不可恢复错误，跳过重试: %s",
+                        _clip_text(error_str, 160),
+                    )
+                    raise
 
                 is_rate_limit = '429' in error_str or 'rate' in error_str.lower() or 'quota' in error_str.lower()
                 
                 if is_rate_limit:
-                    logger.warning(f"[OpenAI] API 限流，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
+                    logger.warning(
+                        "[OpenAI] API 限流，第 %d/%d 次尝试 (model=%s, token_param=%s, error_type=%s): %s",
+                        attempt + 1,
+                        max_retries,
+                        model_name,
+                        mode or "none",
+                        error_type,
+                        _clip_text(error_str, 140),
+                    )
                 else:
-                    logger.warning(f"[OpenAI] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
+                    logger.warning(
+                        "[OpenAI] API 调用失败，第 %d/%d 次尝试 (model=%s, token_param=%s, error_type=%s): %s",
+                        attempt + 1,
+                        max_retries,
+                        model_name,
+                        mode or "none",
+                        error_type,
+                        _clip_text(error_str, 140),
+                    )
                 
                 if attempt == max_retries - 1:
                     raise
         
+        if last_error:
+            raise Exception(f"OpenAI API 调用失败，已达最大重试次数: {_clip_text(_safe_exception_text(last_error), 180)}")
         raise Exception("OpenAI API 调用失败，已达最大重试次数")
     
     def _call_api_with_retry(self, prompt: str, generation_config: dict) -> str:
@@ -892,6 +952,12 @@ class GeminiAnalyzer:
                     
             except Exception as e:
                 last_error = e
+                if _is_non_retryable_llm_error(e):
+                    logger.error(
+                        "[Gemini] 检测到不可恢复错误，停止 Gemini 重试并进入后备链路: %s",
+                        _clip_text(_safe_exception_text(e), 160),
+                    )
+                    break
                 error_str = str(e)
                 
                 # 检查是否是 429 限流错误

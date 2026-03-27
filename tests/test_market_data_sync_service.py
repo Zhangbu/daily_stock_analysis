@@ -12,6 +12,23 @@ from src.services.market_data_sync_service import MarketDataSyncService
 
 
 class MarketDataSyncServiceTestCase(unittest.TestCase):
+    def test_get_hk_universe_uses_watchlist(self) -> None:
+        config = SimpleNamespace(
+            stock_list=["hk00700", "600519", "HK09988", "AAPL"],
+            us_stock_list=[],
+            market_sync_markets=["hk"],
+            market_sync_a_share_full_enabled=False,
+            market_sync_max_codes_per_run=0,
+            market_sync_sleep_seconds=0.0,
+            market_sync_historical_days=365,
+            market_sync_incremental_days=5,
+        )
+        service = MarketDataSyncService(db_manager=MagicMock(), config=config)
+
+        codes = service._get_hk_universe()
+
+        self.assertEqual(codes, ["hk00700", "HK09988"])
+
     def test_get_cn_universe_prioritizes_watchlist(self) -> None:
         config = SimpleNamespace(
             stock_list=["600519", "AAPL", "000001"],
@@ -127,6 +144,12 @@ class MarketDataSyncServiceTestCase(unittest.TestCase):
 
         self.assertEqual(ordered[0], "300750")
         self.assertEqual(ordered[1], "600519")
+
+    def test_normalize_markets_accepts_hk(self) -> None:
+        self.assertEqual(
+            MarketDataSyncService._normalize_markets(["hk", "us", "cn", "hk", "invalid"]),
+            ["hk", "us", "cn"],
+        )
 
 
 if __name__ == "__main__":

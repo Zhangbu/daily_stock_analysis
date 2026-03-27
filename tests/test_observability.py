@@ -41,6 +41,8 @@ class ObservabilityTestCase(unittest.TestCase):
         provider_snapshot = store.provider_snapshot()
         self.assertIn("provider_operation:search_api", provider_snapshot)
         self.assertEqual(provider_snapshot["provider_operation:search_api"]["count"], 1)
+        self.assertIn("p50_duration_ms", provider_snapshot["provider_operation:search_api"])
+        self.assertIn("p95_duration_ms", provider_snapshot["provider_operation:search_api"])
         self.assertEqual(store.recent_slowest(limit=1)[0]["operation"], "provider_operation")
 
     def test_trend_snapshot_groups_events_by_bucket(self):
@@ -58,6 +60,21 @@ class ObservabilityTestCase(unittest.TestCase):
         self.assertEqual(len(trends["trend_operation"]), 2)
         self.assertEqual(trends["trend_operation"][0]["bucket_ts"], 60)
         self.assertEqual(trends["trend_operation"][1]["bucket_ts"], 120)
+        self.assertIn("p50_duration_ms", trends["trend_operation"][0])
+        self.assertIn("p95_duration_ms", trends["trend_operation"][0])
+
+    def test_snapshot_contains_latency_percentiles(self):
+        logger = Mock()
+        store = InMemoryMetricsStore()
+
+        with OperationTimer(logger, "percentile_operation", metric_store=store):
+            pass
+        with OperationTimer(logger, "percentile_operation", metric_store=store):
+            pass
+
+        snapshot = store.snapshot()
+        self.assertIn("p50_duration_ms", snapshot["percentile_operation"])
+        self.assertIn("p95_duration_ms", snapshot["percentile_operation"])
 
 
 if __name__ == "__main__":

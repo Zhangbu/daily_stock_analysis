@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from api.deps import get_system_config_service
 from api.v1.schemas.common import ErrorResponse
 from api.v1.schemas.system_config import (
+    FeatureFlagsResponse,
     SystemConfigConflictResponse,
     SystemConfigResponse,
     SystemConfigSchemaResponse,
@@ -19,6 +20,7 @@ from api.v1.schemas.system_config import (
     ValidateSystemConfigRequest,
     ValidateSystemConfigResponse,
 )
+from src.config import get_config
 from src.services.system_config_service import ConfigConflictError, ConfigValidationError, SystemConfigService
 
 logger = logging.getLogger(__name__)
@@ -39,11 +41,12 @@ router = APIRouter()
 )
 def get_system_config(
     include_schema: bool = Query(True, description="Whether to include schema metadata"),
+    profile: str = Query("full", description="Config profile: full|core"),
     service: SystemConfigService = Depends(get_system_config_service),
 ) -> SystemConfigResponse:
     """Load and return current system configuration."""
     try:
-        payload = service.get_config(include_schema=include_schema)
+        payload = service.get_config(include_schema=include_schema, profile=profile)
         return SystemConfigResponse.model_validate(payload)
     except Exception as exc:
         logger.error("Failed to load system configuration: %s", exc, exc_info=True)
@@ -150,11 +153,12 @@ def validate_system_config(
     description="Return categorized field metadata used for dynamic settings form rendering.",
 )
 def get_system_config_schema(
+    profile: str = Query("full", description="Schema profile: full|core"),
     service: SystemConfigService = Depends(get_system_config_service),
 ) -> SystemConfigSchemaResponse:
     """Return schema metadata for system configuration fields."""
     try:
-        payload = service.get_schema()
+        payload = service.get_schema(profile=profile)
         return SystemConfigSchemaResponse.model_validate(payload)
     except Exception as exc:
         logger.error("Failed to load system configuration schema: %s", exc, exc_info=True)
@@ -165,3 +169,21 @@ def get_system_config_schema(
                 "message": "Failed to load system configuration schema",
             },
         )
+
+
+@router.get(
+    "/features",
+    response_model=FeatureFlagsResponse,
+    summary="Get API feature toggles",
+    description="Expose optional API module switches for frontend route/menu gating.",
+)
+def get_feature_flags() -> FeatureFlagsResponse:
+    """Return current API feature flags."""
+    config = get_config()
+    return FeatureFlagsResponse(
+        agent_api=bool(config.enable_agent_api),
+        backtest_api=bool(config.enable_backtest_api),
+        strategy_backtest_api=bool(config.enable_strategy_backtest_api),
+        market_sync_api=bool(config.enable_market_sync_api),
+        screening_api=bool(config.enable_screening_api),
+    )

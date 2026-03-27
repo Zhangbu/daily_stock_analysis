@@ -29,6 +29,8 @@ class MetricTrendItem(BaseModel):
     total_duration_ms: int
     max_duration_ms: int
     avg_duration_ms: int
+    p50_duration_ms: int
+    p95_duration_ms: int
 
 
 class SystemMetricsResponse(BaseModel):

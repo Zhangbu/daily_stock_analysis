@@ -507,7 +507,7 @@ class DataFetcherManager:
             UnifiedRealtimeQuote 对象，所有数据源都失败则返回 None
         """
         # Normalize code (strip SH/SZ prefix etc.)
-        stock_code = normalize_stock_code(stock_code)
+        stock_code = canonical_stock_code(normalize_stock_code(stock_code))
 
         from .realtime_types import get_realtime_circuit_breaker
         from .akshare_fetcher import _is_us_code
@@ -606,7 +606,15 @@ class DataFetcherManager:
                             if hasattr(fetcher, 'get_realtime_quote'):
                                 quote = fetcher.get_realtime_quote(stock_code)
                             break
-                
+
+                elif source == "yfinance":
+                    # 尝试 YfinanceFetcher（适合作为跨市场兜底）
+                    for fetcher in self._fetchers:
+                        if fetcher.name == "YfinanceFetcher":
+                            if hasattr(fetcher, 'get_realtime_quote'):
+                                quote = fetcher.get_realtime_quote(stock_code)
+                            break
+
                 if quote is not None and quote.has_basic_data():
                     if primary_quote is None:
                         # First successful source becomes primary
@@ -697,7 +705,7 @@ class DataFetcherManager:
             ChipDistribution 对象，失败则返回 None
         """
         # Normalize code (strip SH/SZ prefix etc.)
-        stock_code = normalize_stock_code(stock_code)
+        stock_code = canonical_stock_code(normalize_stock_code(stock_code))
 
         from .realtime_types import get_chip_circuit_breaker
         from src.config import get_config
@@ -758,7 +766,7 @@ class DataFetcherManager:
             股票中文名称，所有数据源都失败则返回 None
         """
         # Normalize code (strip SH/SZ prefix etc.)
-        stock_code = normalize_stock_code(stock_code)
+        stock_code = canonical_stock_code(normalize_stock_code(stock_code))
 
         # 1. 先检查缓存
         if hasattr(self, '_stock_name_cache') and stock_code in self._stock_name_cache:

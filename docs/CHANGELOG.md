@@ -7,6 +7,40 @@
 
 ## [Unreleased]
 
+### 修复（#patch）
+- Telegram 推送新增独立 SSL 配置：支持 `TELEGRAM_CA_BUNDLE` 指定证书链，或用 `TELEGRAM_VERIFY_SSL=false` 在可信环境临时排障；遇到 `CERTIFICATE_VERIFY_FAILED` 时不再盲目重试 3 次，而是直接输出可操作提示。
+- `TushareFetcher` 初始化改为直接调用 `ts.pro_api(TOKEN)`，不再触发 SDK 将 token 写入 `~/tk.csv`；测试/只读沙箱环境下可避免无关的 `Read-only file system` 噪音日志。
+- 市场同步配置新增 `hk` 市场支持：`MARKET_SYNC_MARKETS` 与 `/api/v1/system/market-sync/*` 请求参数现在都可接受 `cn/hk/us`；港股同步按 `STOCK_LIST` 中的港股代码执行，便于直接结合 Yahoo Finance 日线能力补齐港股本地库。
+- Yahoo Finance 接入从“仅美股/美股指数实时行情”扩展为可覆盖 A股/港股/美股统一入口；当 `REALTIME_SOURCE_PRIORITY` 中显式包含 `yfinance` 时，可作为港股/A股实时行情兜底源使用，名称解析也可直接回落到 Yahoo 元数据。
+- 系统配置 `core` 视图补齐实时行情与市场同步关键项：`ENABLE_REALTIME_QUOTE`、`MARKET_SYNC_*` 现在会在 `/api/v1/system/config?profile=core` 与对应 schema 中一并返回，便于前端直接配置 Yahoo/港股同步链路。
+- Web 设置页体验补强：`数据源` 与 `通知渠道` 分类新增配置提示卡片，常见关键字段会展示可直接参考的示例值，降低 `yfinance`、港股同步与 Telegram 证书相关配置的填写成本。
+- Web 设置页多值字段体验增强：`STOCK_LIST`、`US_STOCK_LIST`、`AGENT_SKILLS` 等多值配置支持逐项增删编辑，保存时会自动整理为逗号分隔格式，减少手工维护长字符串的出错概率。
+- OpenAI 兼容接口在出现 `'ascii' codec can't encode` 错误时，会同时清洗 `SYSTEM_PROMPT` 与用户 prompt 中的表格线字符（如 `│`）后重试，避免 5 次重试均失败。
+- OpenAI 重试日志增强：补充模型名、token 参数模式、异常类型与截断错误信息，便于快速定位兼容性问题。
+- Agent 模式下 OpenAI 调用新增 ASCII 编码异常兜底：清洗 `messages/tools` 并在必要时使用 ASCII-safe 转义 payload 重试一次。
+- Agent 初始化 OpenAI 客户端时新增配置校验：若 `OPENAI_API_KEY/OPENAI_BASE_URL` 含非 ASCII 字符，将输出明确字段与位置提示，避免运行时重复报错。
+- 配置加载新增 OpenAI 相关环境变量清洗：`AIHUBMIX_KEY/OPENAI_API_KEY/OPENAI_BASE_URL` 会自动去除前后空白与包裹引号。
+- LLM 重试策略新增“不可恢复错误快速失败”：对 `cannot access free variable`、认证/权限类错误等不再盲目指数重试，优先进入后备链路或快速返回，减少无效等待时间。
+- stale-data 守卫新增上下文日期复用：`StockAnalysisPipeline` 优先使用本次分析已加载的 `context date` 计算数据滞后，减少一次重复数据库读取。
+- LLM 重试策略工具函数已抽离到 `src/llm/retry_policy.py`，`analyzer` 与 `agent llm adapter` 共用同一套错误分类与 ASCII 编码异常识别逻辑，降低维护分叉风险。
+- 情报协调器新增查询级短缓存（`query_id + code` 维度）：同一请求链路重复触发综合情报搜索或 Agent 最新新闻持久化时会直接命中缓存，减少重复外部调用与重复落库。
+- 多维情报搜索在单维度内新增 provider 级 fallback：首选引擎失败时自动尝试下一个可用引擎，降低单搜索源波动造成的情报缺失风险。
+- 可观测性指标新增耗时分位数：`observability` / `observability_by_provider` / `observability_trends` 追加 `p50_duration_ms` 与 `p95_duration_ms`，便于快速识别尾延迟问题。
+- 运行指标面板已展示 `p50/p95`：Operation/Provider/Trend 三个视图均可直接查看分位数耗时，排障时无需只看均值。
+- 通知渠道精简模式生效：`NotificationService` 当前仅激活 `email / telegram / discord` 三类渠道；其他已配置渠道会记录提示并跳过。
+- API 路由支持模块级开关：新增 `ENABLE_AGENT_API`、`ENABLE_BACKTEST_API`、`ENABLE_STRATEGY_BACKTEST_API`、`ENABLE_MARKET_SYNC_API`、`ENABLE_SCREENING_API`，可按部署场景裁剪可选模块入口。
+- 通知分发与交付链路已同步精简：`notification_transports` 与 `analysis_delivery` 仅保留 `email / telegram / discord` 分支，移除其余渠道分发逻辑。
+- 新增 `/api/v1/system/features` 特性开关接口，前端导航与路由会根据开关动态隐藏/禁用已关闭模块入口（agent/backtest/strategy-backtest/screening）。
+- 系统配置 schema 与配置读取进一步收敛到精简通知集：设置页元数据仅保留 `email / telegram / discord`，并在 `/api/v1/system/config` 层过滤已弃用通知键。
+- `NotificationService` 旧渠道发送实现已物理裁剪：移除 wechat/feishu/pushover/pushplus/serverchan/custom-webhook/astrbot，仅保留 `email / telegram / discord` 与上下文会话回复能力。
+- `AnalysisDeliveryService` 批量推送流程已收口：移除历史 WeChat no-op 分支，统一按当前可用渠道分发并改为直接依赖 `notification_channels.NotificationChannel`。
+- 修复 Web 前端空白页问题：`App.tsx` 中 `featureFlags` 状态初始化与加载逻辑已回归到 `AppContent` 组件内，避免因组件外残留代码导致页面渲染失败。
+- 系统配置接口新增精简视图：`/api/v1/system/config` 与 `/api/v1/system/config/schema` 支持 `profile=core`，可仅返回核心分析链路配置。
+- 配置元数据补齐 API 模块开关字段：`ENABLE_AGENT_API`、`ENABLE_BACKTEST_API`、`ENABLE_STRATEGY_BACKTEST_API`、`ENABLE_MARKET_SYNC_API`、`ENABLE_SCREENING_API` 已纳入 schema 注册表。
+- 通知模块进一步去冗余：移除未被调用的 `_send_chunked_messages` 与 `NotificationBuilder` 历史辅助代码，降低维护负担。
+- 配置模型去重：`Config` 中重复定义的 `discord_bot_status` 字段已删除重复项。
+- 新增冗余扫描清单文档：`docs/REDUNDANCY_SCAN_2026-03-26.md`（按 P0/P1/P2 列出已修复项与下一步裁剪建议）。
+
 ### 新增（#minor）
 - 🌍 **市场筛选支持 A股 / 美股切换**
   - Web 与 API 筛选接口新增 `market` 与 `data_mode` 参数
@@ -29,6 +63,54 @@
   - 美股模式下隐藏 A股专属板块过滤，避免误解
 
 ### 优化（#patch）
+- 📉 **分析结果准确性保护：新增过期行情自动降级**
+  - 新增配置 `ANALYSIS_STALE_DAYS_LIMIT`（默认 `2` 天）
+  - 当最新可用行情超过阈值，或本次抓取失败且仅能使用旧数据时，系统会自动将建议降级为 `观望`、`hold`，并将置信度下调为 `低`
+  - 同步在 `analysis_summary` / `risk_warning` 中追加“数据非最新”提示，降低旧数据导致的误判风险
+- ⚡ **单股分析首段耗时优化：实时行情与筹码分布并行抓取**
+  - `StockAnalysisPipeline.analyze_stock()` 改为并发拉取实时行情与筹码分布
+  - 在保持现有容错语义不变前提下，降低单只股票分析前置 I/O 等待时间
+- ⚡ **标准分析链路进一步提速：趋势计算与情报搜索并行执行**
+  - `StockAnalysisPipeline` 在标准分析模式下，改为并发执行趋势分析与多维情报搜索
+  - 减少单股分析关键路径等待时间，提升整体吞吐
+- 🛡️ **数据完整性守卫增强**
+  - 当历史与实时行情同时缺失时，自动降级为 `观望/hold` 并下调置信度
+  - 当趋势或情报维度缺失时，自动降低置信度并追加风险提示，减少信息不全时的误判
+- 🪵 **标准分析链路新增分段耗时日志**
+  - 新增 `trend / intel / inputs_parallel / llm_analyze` 阶段耗时输出（`duration_ms`）
+  - 可更快定位瓶颈在数据侧还是 LLM 调用侧
+- 📈 **分段耗时接入内存指标**
+  - `pipeline_stage_*` 分段耗时已写入 `metrics_store`，不仅日志可查，系统指标也可聚合观察
+- 🧪 **新增 pipeline 守卫逻辑单测**
+  - 新增 `tests/test_pipeline_guards.py`，覆盖过期数据降级与数据完整性守卫的核心分支
+- 🧪 **新增 LLM 快速失败与日期复用回归测试**
+  - 新增 `tests/test_analyzer_retry_policy.py`，覆盖不可恢复错误识别与 OpenAI 快速失败行为
+  - `tests/test_pipeline_guards.py` 新增上下文日期优先路径，锁定 stale-data guard 无额外 DB 查询的行为
+- 🧪 **新增共享重试策略单测**
+  - 新增 `tests/test_llm_retry_policy.py`，覆盖 ASCII 编码错误识别、不可恢复错误判定与非 ASCII 配置检测基础能力
+- 🧪 **情报协调器新增查询级缓存回归测试**
+  - `tests/test_intel_coordinator.py` 新增同一 query 重复调用命中缓存用例，锁定“只搜索一次、只落库一次”的行为
+- 🧪 **多维情报 provider fallback 回归测试**
+  - `tests/test_search_news_freshness.py` 新增“首个 provider 失败自动回退到下一 provider”用例
+- 🧪 **可观测性分位数回归测试**
+  - `tests/test_observability.py` 与 `tests/test_system_metrics_endpoint.py` 新增 `p50/p95` 字段断言
+- 🧪 **新增分段指标回归测试**
+  - 新增 `tests/test_pipeline_stage_metrics.py`，锁定分段耗时指标写入行为
+- 🧩 **Pipeline 质量守卫与分段指标逻辑抽离**
+  - 新增 `src/core/analysis_quality.py`，承载 stale-data/completeness guard 与 stage latency recorder
+  - `StockAnalysisPipeline` 改为委托该模块，降低主编排器复杂度并保留兼容调用入口
+- 🧪 **新增故障链路端到端回归测试**
+  - 新增 `tests/test_pipeline_fault_tolerance.py`，覆盖抓数失败+旧数据降级、intel 失败容错、趋势/情报缺失时降置信输出
+- 🧩 **并行输入收集逻辑抽离**
+  - 新增 `src/core/analysis_inputs.py`，承载趋势与情报并行收集及容错逻辑
+  - `StockAnalysisPipeline._collect_parallel_analysis_inputs()` 现委托输入收集器，进一步收敛编排层复杂度
+- 🧹 **搜索服务重复实现清理**
+  - `src/search_service.py` 已移除历史 Provider/类型重复实现代码块
+  - 统一只使用 `src/search/providers.py` 与 `src/search/types.py` 的 extracted 实现，降低维护复杂度与阅读负担
+- 📨 **通知领域元数据抽离与通道分发健壮性修复**
+  - 新增 `src/notification_channels.py`，承载 `NotificationChannel`、`ChannelDetector` 与 `SMTP_CONFIGS`
+  - `src/notification.py` 改为引用抽离模块，减少超大文件内聚复杂度
+  - `src/notification_transports.py` 通道匹配改为基于标准枚举值，不再依赖 `service.NotificationChannel` 动态属性
 - 🏗️ **架构优化任务清单与首个基础设施重构落地**
   - 新增 `docs/ARCHITECTURE_ISSUE_BACKLOG.md`，将架构优化方案拆解为可执行 Issue 清单，包含优先级、范围、验收标准与风险
   - 新增 `data_provider/core/` 基础模块，抽离股票代码标准化与速率限制基础能力

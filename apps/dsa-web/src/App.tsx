@@ -1,7 +1,8 @@
 import type React from 'react';
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {BrowserRouter as Router, Routes, Route, NavLink, useLocation, Navigate} from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { systemConfigApi, type FeatureFlagsResponse } from './api/systemConfig';
 import './App.css';
 
 const HomePage = lazy(() => import('./pages/HomePage'));
@@ -79,6 +80,16 @@ type DockItem = {
     icon: React.FC<{ active?: boolean }>;
 };
 
+type FeatureFlags = FeatureFlagsResponse;
+
+const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
+    agentApi: true,
+    backtestApi: true,
+    strategyBacktestApi: true,
+    marketSyncApi: true,
+    screeningApi: true,
+};
+
 const NAV_ITEMS: DockItem[] = [
     {
         key: 'home',
@@ -125,8 +136,18 @@ const NAV_ITEMS: DockItem[] = [
 ];
 
 // Dock 导航栏
-const DockNav: React.FC = () => {
+const DockNav: React.FC<{ featureFlags: FeatureFlags }> = ({ featureFlags }) => {
     const {authEnabled, logout} = useAuth();
+    const visibleNavItems = useMemo(() => {
+        return NAV_ITEMS.filter((item) => {
+            if (item.key === 'chat') return featureFlags.agentApi;
+            if (item.key === 'screening') return featureFlags.screeningApi;
+            if (item.key === 'backtest') return featureFlags.backtestApi;
+            if (item.key === 'strategy-backtest') return featureFlags.strategyBacktestApi;
+            return true;
+        });
+    }, [featureFlags]);
+
     return (
         <aside className="dock-nav" aria-label="主导航">
             <div className="dock-surface">
@@ -138,7 +159,7 @@ const DockNav: React.FC = () => {
                 </NavLink>
 
                 <nav className="dock-items" aria-label="页面">
-                    {NAV_ITEMS.map((item) => {
+                    {visibleNavItems.map((item) => {
                         const Icon = item.icon;
                         return (
                             <NavLink
@@ -176,6 +197,25 @@ const DockNav: React.FC = () => {
 const AppContent: React.FC = () => {
     const location = useLocation();
     const { authEnabled, loggedIn, isLoading, loadError, refreshStatus } = useAuth();
+    const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(DEFAULT_FEATURE_FLAGS);
+
+    useEffect(() => {
+        let active = true;
+        const loadFeatures = async () => {
+            try {
+                const flags = await systemConfigApi.getFeatures();
+                if (active) {
+                    setFeatureFlags(flags);
+                }
+            } catch {
+                // Fallback to defaults when endpoint is unavailable.
+            }
+        };
+        void loadFeatures();
+        return () => {
+            active = false;
+        };
+    }, []);
 
     if (isLoading) {
         return (
@@ -214,7 +254,7 @@ const AppContent: React.FC = () => {
 
     return (
         <div className="flex min-h-screen bg-base">
-            <DockNav/>
+            <DockNav featureFlags={featureFlags} />
             <main className="flex-1 dock-safe-area">
                 <Suspense
                     fallback={
@@ -225,10 +265,10 @@ const AppContent: React.FC = () => {
                 >
                     <Routes>
                         <Route path="/" element={<HomePage/>}/>
-                        <Route path="/chat" element={<ChatPage/>}/>
-                        <Route path="/screening" element={<ScreeningPage/>}/>
-                        <Route path="/backtest" element={<BacktestPage/>}/>
-                        <Route path="/strategy-backtest" element={<StrategyBacktestPage/>}/>
+                        <Route path="/chat" element={featureFlags.agentApi ? <ChatPage/> : <Navigate to="/" replace />} />
+                        <Route path="/screening" element={featureFlags.screeningApi ? <ScreeningPage/> : <Navigate to="/" replace />} />
+                        <Route path="/backtest" element={featureFlags.backtestApi ? <BacktestPage/> : <Navigate to="/" replace />} />
+                        <Route path="/strategy-backtest" element={featureFlags.strategyBacktestApi ? <StrategyBacktestPage/> : <Navigate to="/" replace />} />
                         <Route path="/metrics" element={<MetricsPage/>}/>
                         <Route path="/settings" element={<SettingsPage/>}/>
                         <Route path="/login" element={<LoginPage/>}/>

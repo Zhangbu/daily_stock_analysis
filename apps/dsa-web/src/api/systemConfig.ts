@@ -18,6 +18,14 @@ type ApiErrorPayload = {
   current_config_version?: string;
 };
 
+export interface FeatureFlagsResponse {
+  agentApi: boolean;
+  backtestApi: boolean;
+  strategyBacktestApi: boolean;
+  marketSyncApi: boolean;
+  screeningApi: boolean;
+}
+
 export class SystemConfigValidationError extends Error {
   issues: SystemConfigValidationErrorResponse['issues'];
 
@@ -69,16 +77,23 @@ function extractApiMessage(error: unknown, fallback: string): string {
 }
 
 export const systemConfigApi = {
-  async getConfig(includeSchema = true): Promise<SystemConfigResponse> {
+  async getConfig(includeSchema = true, profile: 'full' | 'core' = 'full'): Promise<SystemConfigResponse> {
     const response = await apiClient.get<Record<string, unknown>>('/api/v1/system/config', {
-      params: { include_schema: includeSchema },
+      params: { include_schema: includeSchema, profile },
     });
     return toCamelCase<SystemConfigResponse>(response.data);
   },
 
-  async getSchema(): Promise<SystemConfigSchemaResponse> {
-    const response = await apiClient.get<Record<string, unknown>>('/api/v1/system/config/schema');
+  async getSchema(profile: 'full' | 'core' = 'full'): Promise<SystemConfigSchemaResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/system/config/schema', {
+      params: { profile },
+    });
     return toCamelCase<SystemConfigSchemaResponse>(response.data);
+  },
+
+  async getFeatures(): Promise<FeatureFlagsResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/system/features');
+    return toCamelCase<FeatureFlagsResponse>(response.data);
   },
 
   async validate(payload: ValidateSystemConfigRequest): Promise<ValidateSystemConfigResponse> {

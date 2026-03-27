@@ -130,3 +130,13 @@ class SystemConfigConflictResponse(BaseModel):
     error: str
     message: str
     current_config_version: str
+
+
+class FeatureFlagsResponse(BaseModel):
+    """Feature toggles exposed to frontend for route/menu gating."""
+
+    agent_api: bool
+    backtest_api: bool
+    strategy_backtest_api: bool
+    market_sync_api: bool
+    screening_api: bool

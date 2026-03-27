@@ -9,7 +9,7 @@
 [![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-Ready-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/)
 
-> 🤖 基于 AI 大模型的 A股/港股/美股自选股智能分析系统，每日自动分析并推送「决策仪表盘」到企业微信/飞书/Telegram/邮箱
+> 🤖 基于 AI 大模型的 A股/港股/美股自选股智能分析系统，每日自动分析并推送「决策仪表盘」到 Telegram/邮箱/Discord
 
 [**功能特性**](#-功能特性) · [**快速开始**](#-快速开始) · [**推送效果**](#-推送效果) · [**完整指南**](docs/full-guide.md) · [**常见问题**](docs/FAQ.md) · [**更新日志**](docs/CHANGELOG.md)
 
@@ -39,7 +39,7 @@
 | 回测 | AI 回测验证 | 自动评估历史分析准确率，方向胜率、止盈止损命中率 |
 | **选股** | **市场筛选** | **支持 A股/美股切换，既可用实时行情筛选，也可基于已同步历史数据做数据库评分排序** |
 | **Agent 问股** | **策略对话** | **多轮策略问答，支持均线金叉/缠论/波浪等 11 种内置策略，Web/Bot/API 全链路** |
-| 推送 | 多渠道通知 | 企业微信、飞书、Telegram、钉钉、邮件、Pushover |
+| 推送 | 多渠道通知 | Telegram、邮件、Discord |
 | 自动化 | 定时运行 | GitHub Actions 定时执行，无需服务器 |
 
 ### 技术栈与数据来源
@@ -50,7 +50,7 @@
 | 行情数据 | AkShare、Tushare、Pytdx、Baostock、YFinance |
 | 新闻搜索 | Tavily、SerpAPI、Bocha、Brave |
 
-> 注：美股历史数据与实时行情统一使用 YFinance，确保复权一致性
+> 注：美股历史数据与实时行情统一使用 YFinance，确保复权一致性；实时行情链路也支持通过 `REALTIME_SOURCE_PRIORITY=yfinance,...` 为港股/A股启用 Yahoo Finance 兜底。
 
 ### 内置交易纪律
 
@@ -61,6 +61,8 @@
 | 精确点位 | 买入价、止损价、目标价 |
 | 检查清单 | 每项条件以「满足 / 注意 / 不满足」标记 |
 | 新闻时效 | 可配置新闻最大时效（默认 3 天），避免使用过时信息 |
+| 可靠性保护 | 当关键维度（历史/实时/趋势/情报）缺失时，系统自动下调置信度并在必要时降级为观望 |
+| LLM 重试收敛 | 对不可恢复错误（如认证/权限/配置或本地代码错误）快速失败，避免无效指数重试拖慢整批分析 |
 | 缓存治理 | 支持历史行情文件 TTL、正文抓取内存缓存 TTL、缓存命中统计、重复搜索请求短时去重 |
 | 可观测性 | 关键链路统一记录 `query_id / stock_code / provider / cache_hit / duration_ms`，Web 指标页支持手动刷新、缓存清理与最近趋势查看 |
 | 回测筛选 | 回测页支持按 Agent 策略多选筛选历史分析记录，查看不同策略建议的命中表现 |
@@ -99,26 +101,24 @@
 > 注：AI 优先级 Gemini > Anthropic > OpenAI（含 AIHubmix），至少配置一个。`AIHUBMIX_KEY` 无需配置 `OPENAI_BASE_URL`，系统自动适配。图片识别需 Vision 能力模型。DeepSeek 思考模式（deepseek-reasoner、deepseek-r1、qwq、deepseek-chat）按模型名自动识别，无需额外配置。
 
 <details>
-<summary><b>通知渠道配置</b>（点击展开，至少配置一个）</summary>
+<summary><b>通知渠道配置</b>（点击展开，精简模式建议仅 Email / Telegram / Discord）</summary>
 
 
 | Secret 名称 | 说明 | 必填 |
 |------------|------|:----:|
-| `WECHAT_WEBHOOK_URL` | 企业微信 Webhook URL | 可选 |
-| `FEISHU_WEBHOOK_URL` | 飞书 Webhook URL | 可选 |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token（@BotFather 获取） | 可选 |
 | `TELEGRAM_CHAT_ID` | Telegram Chat ID | 可选 |
 | `TELEGRAM_MESSAGE_THREAD_ID` | Telegram Topic ID (用于发送到子话题) | 可选 |
+| `TELEGRAM_VERIFY_SSL` | Telegram HTTPS 证书校验（默认 true）。仅在可信环境排障时才建议设为 false | 可选 |
+| `TELEGRAM_CA_BUNDLE` | Telegram 专用 CA 证书路径（如 `/etc/ssl/certs/ca-certificates.crt`） | 可选 |
 | `EMAIL_SENDER` | 发件人邮箱（如 `xxx@qq.com`） | 可选 |
 | `EMAIL_PASSWORD` | 邮箱授权码（非登录密码） | 可选 |
 | `EMAIL_RECEIVERS` | 收件人邮箱（多个用逗号分隔，留空则发给自己） | 可选 |
 | `EMAIL_SENDER_NAME` | 邮件发件人显示名称（默认：daily_stock_analysis股票分析助手） | 可选 |
 | `STOCK_GROUP_N` / `EMAIL_GROUP_N` | 股票分组发往不同邮箱（如 `STOCK_GROUP_1=600519,300750` `EMAIL_GROUP_1=user1@example.com`） | 可选 |
-| `PUSHPLUS_TOKEN` | PushPlus Token（[获取地址](https://www.pushplus.plus)，国内推送服务） | 可选 |
-| `PUSHPLUS_TOPIC` | PushPlus 群组编码（一对多推送，配置后消息推送给群组所有订阅用户） | 可选 |
-| `SERVERCHAN3_SENDKEY` | Server酱³ Sendkey（[获取地址](https://sc3.ft07.com/)，手机APP推送服务） | 可选 |
-| `CUSTOM_WEBHOOK_URLS` | 自定义 Webhook（支持钉钉等，多个用逗号分隔） | 可选 |
-| `CUSTOM_WEBHOOK_BEARER_TOKEN` | 自定义 Webhook 的 Bearer Token（用于需要认证的 Webhook） | 可选 |
+| `DISCORD_BOT_TOKEN` | Discord Bot Token | 可选 |
+| `DISCORD_MAIN_CHANNEL_ID` | Discord Channel ID | 可选 |
+| `DISCORD_WEBHOOK_URL` | Discord Webhook URL（与 Bot 二选一即可） | 可选 |
 | `WEBHOOK_VERIFY_SSL` | Webhook HTTPS 证书校验（默认 true）。设为 false 可支持自签名证书。警告：关闭有严重安全风险，仅限可信内网 | 可选 |
 | `SINGLE_STOCK_NOTIFY` | 单股推送模式：设为 `true` 则每分析完一只股票立即推送 | 可选 |
 | `REPORT_TYPE` | 报告类型：`simple`(精简) 或 `full`(完整)，Docker环境推荐设为 `full` | 可选 |
@@ -126,7 +126,7 @@
 | `ANALYSIS_DELAY` | 个股分析和大盘分析之间的延迟（秒），避免API限流，如 `10` | 可选 |
 | `MERGE_EMAIL_NOTIFICATION` | 个股与大盘复盘合并推送（默认 false），减少邮件数量 | 可选 |
 
-> 至少配置一个渠道，配置多个则同时推送。更多配置请参考 [完整指南](docs/full-guide.md)
+> 精简模式下，建议仅保留 Email / Telegram / Discord 三类渠道。更多配置请参考 [完整指南](docs/full-guide.md)
 
 </details>
 
@@ -143,16 +143,21 @@
 | `TUSHARE_TOKEN` | [Tushare Pro](https://tushare.pro/weborder/#/login?reg=834638 ) Token | 可选 |
 | `WECHAT_MSG_TYPE` | 企微消息类型，默认 markdown，支持配置 text 类型，发送纯 markdown 文本 | 可选 |
 | `NEWS_MAX_AGE_DAYS` | 新闻最大时效（天），默认 3，避免使用过时信息 | 可选 |
+| `ANALYSIS_STALE_DAYS_LIMIT` | 行情数据最大滞后天数（默认 `2`），超过后自动将建议降级为“观望”并下调置信度 | 可选 |
 | `BIAS_THRESHOLD` | 乖离率阈值（%），默认 5.0，超过提示不追高；强势趋势股自动放宽 | 可选 |
 | `AGENT_MODE` | 开启 Agent 策略问股模式（`true`/`false`，默认 false） | 可选 |
+| `ENABLE_AGENT_API` | 是否注册 Agent API 路由（默认 `true`） | 可选 |
 | `AGENT_SKILLS` | 激活的策略（逗号分隔），`all` 启用全部 11 个；不配置时默认 4 个，详见 `.env.example` | 可选 |
 | `AGENT_MAX_STEPS` | Agent 最大推理步数（默认 10） | 可选 |
 | `AGENT_STRATEGY_DIR` | 自定义策略目录（默认内置 `strategies/`） | 可选 |
+| `ENABLE_BACKTEST_API` | 是否注册建议回测 API 路由（默认 `true`） | 可选 |
+| `ENABLE_STRATEGY_BACKTEST_API` | 是否注册策略信号回测 API 路由（默认 `true`） | 可选 |
 | `TRADING_DAY_CHECK_ENABLED` | 交易日检查（默认 `true`）：非交易日跳过执行；设为 `false` 或使用 `--force-run` 强制执行 | 可选 |
 | `MARKET_DATA_CACHE_TTL` | 历史行情文件缓存 TTL（秒，默认 `21600`） | 可选 |
 | `MARKET_SYNC_ENABLED` | 启用市场日线同步服务（默认 `false`） | 可选 |
+| `ENABLE_MARKET_SYNC_API` | 是否注册市场同步 API 路由（默认 `true`） | 可选 |
 | `MARKET_SYNC_ON_STARTUP` | 启动后后台自动开始同步（默认 `false`） | 可选 |
-| `MARKET_SYNC_MARKETS` | 同步市场，支持 `cn,us`，逗号分隔 | 可选 |
+| `MARKET_SYNC_MARKETS` | 同步市场，支持 `cn,hk,us`，逗号分隔 | 可选 |
 | `MARKET_SYNC_A_SHARE_FULL_ENABLED` | 启用 A 股全市场慢同步；关闭时仅同步自选股/配置池 | 可选 |
 | `MARKET_SYNC_HISTORICAL_DAYS` | 首次回补历史天数（默认 `365`） | 可选 |
 | `MARKET_SYNC_INCREMENTAL_DAYS` | 已有历史时的增量补数窗口（默认 `5`） | 可选 |
@@ -161,6 +166,7 @@
 | `ARTICLE_CONTENT_CACHE_TTL` | 正文抓取内存缓存 TTL（秒，默认 `1800`） | 可选 |
 | `OBSERVABILITY_WARN_LATENCY_MS` | 慢请求观测阈值（毫秒，默认 `2000`） | 可选 |
 | `DYNAMIC_STOCK_SELECTION` | 动态选股模式（默认 `false`）：启用后自动分析热门板块龙头股，替代固定股票列表 | 可选 |
+| `ENABLE_SCREENING_API` | 是否注册市场筛选 API 路由（默认 `true`） | 可选 |
 | `HOT_SECTOR_COUNT` | 热门板块数量（默认 `3`）：动态选股时分析的热门板块数量 | 可选 |
 | `LEADERS_PER_SECTOR` | 每板块龙头股数量（默认 `2`）：每个热门板块选取的龙头股数量 | 可选 |
 | `HISTORICAL_DATA_DAYS` | 历史数据天数（默认 `30`）：技术分析使用的历史数据天数，可扩展至 60/90/120 天 | 可选 |
@@ -190,7 +196,7 @@
 - `实时筛选` 模式沿用原有实时行情链路
 - 启用 `MARKET_SYNC_ENABLED=true` 与 `MARKET_SYNC_ON_STARTUP=true` 后，服务启动会后台慢速同步市场数据
 - 市场同步会优先处理本地缺失或落后较多的股票，尽量减少对已最新数据的重复抓取
-- 当前 A股可开启全市场慢同步；美股暂按 `STOCK_LIST + US_STOCK_LIST` 配置池同步
+- 当前 A股可开启全市场慢同步；港股按 `STOCK_LIST` 中的港股代码同步；美股按 `STOCK_LIST + US_STOCK_LIST` 配置池同步
 
 ### 方式二：本地运行 / Docker 部署
 
@@ -271,6 +277,8 @@ python main.py
 包含完整的配置管理、任务监控和手动分析功能。
 
 **可选密码保护**：在 `.env` 中设置 `ADMIN_AUTH_ENABLED=true` 可启用 Web 登录，首次访问在网页设置初始密码，保护 Settings 中的 API 密钥等敏感配置。详见 [完整指南](docs/full-guide.md)。
+
+**设置页引导增强**：在 **设置 → 数据源 / 通知渠道** 中，页面会根据当前分类展示配置提示，并为常见字段提供示例值，方便快速填写 `REALTIME_SOURCE_PRIORITY`、`MARKET_SYNC_MARKETS`、`TELEGRAM_CA_BUNDLE` 等关键配置。像 `STOCK_LIST`、`US_STOCK_LIST`、`AGENT_SKILLS` 这类多值字段，也支持逐项增删编辑。
 
 ### 从图片添加股票
 

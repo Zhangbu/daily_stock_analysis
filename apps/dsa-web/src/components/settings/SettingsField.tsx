@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type React from 'react';
 import { EyeToggleIcon, Select } from '../common';
 import type { ConfigValidationIssue, SystemConfigItem } from '../../types/systemConfig';
-import { getFieldDescriptionZh, getFieldTitleZh } from '../../utils/systemConfigI18n';
+import { getFieldDescriptionZh, getFieldExampleZh, getFieldTitleZh } from '../../utils/systemConfigI18n';
 
 function isMultiValueField(item: SystemConfigItem): boolean {
   const validation = (item.schema?.validation ?? {}) as Record<string, unknown>;
@@ -14,7 +14,10 @@ function parseMultiValues(value: string): string[] {
     return [''];
   }
 
-  const values = value.split(',').map((entry) => entry.trim());
+  const values = value
+    .split(/[\n,]+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
   return values.length ? values : [''];
 }
 
@@ -56,16 +59,62 @@ function renderFieldControl(
     );
   }
 
+  if (isMultiValue && controlType !== 'password') {
+    const values = parseMultiValues(value);
+
+    return (
+      <div className="space-y-2">
+        {values.map((entry, index) => (
+          <div className="flex items-center gap-2" key={`${item.key}-${index}`}>
+            <input
+              type={controlType === 'number' ? 'number' : 'text'}
+              className={`${commonClass} flex-1`}
+              value={entry}
+              disabled={disabled || !schema?.isEditable}
+              onChange={(event) => {
+                const nextValues = [...values];
+                nextValues[index] = event.target.value;
+                onChange(serializeMultiValues(nextValues));
+              }}
+            />
+            <button
+              type="button"
+              className="btn-secondary !px-3 !py-2 text-xs"
+              disabled={disabled || !schema?.isEditable || values.length <= 1}
+              onClick={() => {
+                const nextValues = values.filter((_, rowIndex) => rowIndex !== index);
+                onChange(serializeMultiValues(nextValues.length ? nextValues : ['']));
+              }}
+            >
+              删除
+            </button>
+          </div>
+        ))}
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn-secondary !px-3 !py-2 text-xs"
+            disabled={disabled || !schema?.isEditable}
+            onClick={() => onChange(serializeMultiValues([...values, '']))}
+          >
+            添加一项
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (controlType === 'select' && schema?.options?.length) {
     return (
-        <Select
-          value={value}
-          onChange={onChange}
-          options={schema.options.map((option) => ({ value: option, label: option }))}
-          disabled={disabled || !schema.isEditable}
-          placeholder="请选择"
-        />
-      );
+      <Select
+        value={value}
+        onChange={onChange}
+        options={schema.options.map((option) => ({ value: option, label: option }))}
+        disabled={disabled || !schema.isEditable}
+        placeholder="请选择"
+      />
+    );
   }
 
   if (controlType === 'switch') {
@@ -191,9 +240,29 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
   const isMultiValue = isMultiValueField(item);
   const title = getFieldTitleZh(item.key, item.key);
   const description = getFieldDescriptionZh(item.key);
+  const example = getFieldExampleZh(item.key);
   const hasError = issues.some((issue) => issue.severity === 'error');
   const [isSecretVisible, setIsSecretVisible] = useState(false);
   const [isPasswordEditable, setIsPasswordEditable] = useState(false);
+  const [copyButtonText, setCopyButtonText] = useState('复制示例');
+
+  const canApplyExample = Boolean(example) && schema?.isEditable && !disabled && value !== example;
+
+  const handleCopyExample = async () => {
+    if (!example) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(example);
+      setCopyButtonText('已复制');
+      window.setTimeout(() => setCopyButtonText('复制示例'), 1800);
+    } catch (error) {
+      console.error('Failed to copy config example:', error);
+      setCopyButtonText('复制失败');
+      window.setTimeout(() => setCopyButtonText('复制示例'), 1800);
+    }
+  };
 
   return (
     <div className={`rounded-xl border p-4 ${hasError ? 'border-red-500/35' : 'border-white/8'} bg-elevated/50`}>
@@ -210,6 +279,32 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
         <p className="mb-3 text-xs text-muted" title={description}>
           {description}
         </p>
+      ) : null}
+
+      {example ? (
+        <div className="mb-3 rounded-lg border border-amber-300/20 bg-amber-300/5 px-3 py-3 text-[11px] text-amber-100">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="shrink-0 uppercase tracking-wide text-amber-200/80">示例</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="btn-secondary !px-2.5 !py-1 text-[11px]"
+                onClick={() => onChange(item.key, example)}
+                disabled={!canApplyExample}
+              >
+                填入示例
+              </button>
+              <button
+                type="button"
+                className="btn-secondary !px-2.5 !py-1 text-[11px]"
+                onClick={() => void handleCopyExample()}
+              >
+                {copyButtonText}
+              </button>
+            </div>
+          </div>
+          <code className="mt-2 block overflow-x-auto whitespace-nowrap text-amber-50">{example}</code>
+        </div>
       ) : null}
 
       <div id={`setting-${item.key}`}>
@@ -229,6 +324,12 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
         <p className="mt-2 text-[11px] text-secondary">
           密钥默认隐藏，可点击眼睛图标查看明文。
           {isMultiValue ? ' 支持添加多个输入框进行增删。' : ''}
+        </p>
+      ) : null}
+
+      {isMultiValue && !schema?.isSensitive ? (
+        <p className="mt-2 text-[11px] text-secondary">
+          多值字段支持逐项编辑，保存时会自动整理为逗号分隔格式。
         </p>
       ) : null}
 

@@ -17,6 +17,7 @@ class InMemoryMetricsStore:
     def __init__(self) -> None:
         self._trend_bucket_seconds = 60
         self._trend_retention_buckets = 10
+        self._latency_sample_limit = 200
         self._metrics = defaultdict(
             lambda: {
                 "count": 0,
@@ -28,6 +29,7 @@ class InMemoryMetricsStore:
                 "max_duration_ms": 0,
             }
         )
+        self._latency_samples = defaultdict(list)
         self._provider_metrics = defaultdict(
             lambda: {
                 "count": 0,
@@ -37,6 +39,7 @@ class InMemoryMetricsStore:
                 "max_duration_ms": 0,
             }
         )
+        self._provider_latency_samples = defaultdict(list)
         self._recent_slowest: List[Dict[str, object]] = []
         self._trend_metrics = defaultdict(
             lambda: {
@@ -49,6 +52,7 @@ class InMemoryMetricsStore:
                 "max_duration_ms": 0,
             }
         )
+        self._trend_latency_samples = defaultdict(list)
 
     def record(
         self,
@@ -64,6 +68,7 @@ class InMemoryMetricsStore:
         metric["count"] += 1
         metric["total_duration_ms"] += duration_ms
         metric["max_duration_ms"] = max(metric["max_duration_ms"], duration_ms)
+        self._append_latency_sample(self._latency_samples[operation], duration_ms)
         if status == "ok":
             metric["success"] += 1
         else:
@@ -78,6 +83,7 @@ class InMemoryMetricsStore:
             provider_metric["count"] += 1
             provider_metric["total_duration_ms"] += duration_ms
             provider_metric["max_duration_ms"] = max(provider_metric["max_duration_ms"], duration_ms)
+            self._append_latency_sample(self._provider_latency_samples[provider_key], duration_ms)
             if status == "ok":
                 provider_metric["success"] += 1
             else:
@@ -103,6 +109,8 @@ class InMemoryMetricsStore:
             item["avg_duration_ms"] = (
                 int(metric["total_duration_ms"] / metric["count"]) if metric["count"] else 0
             )
+            item["p50_duration_ms"] = self._percentile_ms(self._latency_samples[operation], 0.5)
+            item["p95_duration_ms"] = self._percentile_ms(self._latency_samples[operation], 0.95)
             snapshot[operation] = item
         return snapshot
 
@@ -114,6 +122,8 @@ class InMemoryMetricsStore:
             item["avg_duration_ms"] = (
                 int(metric["total_duration_ms"] / metric["count"]) if metric["count"] else 0
             )
+            item["p50_duration_ms"] = self._percentile_ms(self._provider_latency_samples[key], 0.5)
+            item["p95_duration_ms"] = self._percentile_ms(self._provider_latency_samples[key], 0.95)
             snapshot[key] = item
         return snapshot
 
@@ -132,6 +142,9 @@ class InMemoryMetricsStore:
             item["avg_duration_ms"] = (
                 int(metric["total_duration_ms"] / metric["count"]) if metric["count"] else 0
             )
+            samples = self._trend_latency_samples[bucket_key]
+            item["p50_duration_ms"] = self._percentile_ms(samples, 0.5)
+            item["p95_duration_ms"] = self._percentile_ms(samples, 0.95)
             trend_points[operation].append(item)
 
         for operation, points in trend_points.items():
@@ -141,9 +154,12 @@ class InMemoryMetricsStore:
     def clear(self) -> None:
         """Reset all in-memory metrics."""
         self._metrics.clear()
+        self._latency_samples.clear()
         self._provider_metrics.clear()
+        self._provider_latency_samples.clear()
         self._recent_slowest.clear()
         self._trend_metrics.clear()
+        self._trend_latency_samples.clear()
 
     def _record_slow_event(
         self,
@@ -178,6 +194,7 @@ class InMemoryMetricsStore:
         trend_metric["count"] += 1
         trend_metric["total_duration_ms"] += duration_ms
         trend_metric["max_duration_ms"] = max(trend_metric["max_duration_ms"], duration_ms)
+        self._append_latency_sample(self._trend_latency_samples[bucket_key], duration_ms)
         if status == "ok":
             trend_metric["success"] += 1
         else:
@@ -191,6 +208,23 @@ class InMemoryMetricsStore:
         expired_keys = [key for key in self._trend_metrics if key[1] < min_bucket_ts]
         for key in expired_keys:
             del self._trend_metrics[key]
+            self._trend_latency_samples.pop(key, None)
+
+    def _append_latency_sample(self, samples: List[int], value: int) -> None:
+        samples.append(int(value))
+        if len(samples) > self._latency_sample_limit:
+            del samples[: len(samples) - self._latency_sample_limit]
+
+    @staticmethod
+    def _percentile_ms(samples: List[int], quantile: float) -> int:
+        if not samples:
+            return 0
+        ordered = sorted(samples)
+        if len(ordered) == 1:
+            return int(ordered[0])
+        index = int(round((len(ordered) - 1) * quantile))
+        index = max(0, min(index, len(ordered) - 1))
+        return int(ordered[index])
 
 
 metrics_store = InMemoryMetricsStore()

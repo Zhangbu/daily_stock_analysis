@@ -30,7 +30,7 @@ from tenacity import (
 )
 
 from .base import BaseFetcher, DataFetchError, RateLimiter, STANDARD_COLUMNS
-from .realtime_types import UnifiedRealtimeQuote, RealtimeSource
+from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float, safe_int
 from .us_index_mapping import get_us_index_yf_symbol, is_us_index_code, is_us_stock_code
 
 logger = logging.getLogger(__name__)
@@ -473,6 +473,107 @@ class YfinanceFetcher(BaseFetcher):
             logger.warning(f"[Yfinance] 获取美股指数 {user_code} 实时行情失败: {e}")
             return None
 
+    def _extract_fast_info_field(self, info: Any, *field_names: str) -> Any:
+        """Read the first non-empty field from yfinance fast_info/info objects."""
+        for field_name in field_names:
+            try:
+                if isinstance(info, dict):
+                    value = info.get(field_name)
+                else:
+                    value = getattr(info, field_name, None)
+            except Exception:
+                value = None
+            if value is not None:
+                return value
+        return None
+
+    def _build_realtime_quote_from_ticker(
+        self,
+        *,
+        ticker: Any,
+        user_code: str,
+        default_name: str,
+    ) -> Optional[UnifiedRealtimeQuote]:
+        """Build a unified realtime quote for US/CN/HK symbols from one ticker."""
+        try:
+            info = ticker.fast_info
+            if info is None:
+                raise ValueError("fast_info is None")
+
+            price = safe_float(self._extract_fast_info_field(info, "lastPrice", "last_price"))
+            prev_close = safe_float(self._extract_fast_info_field(info, "previousClose", "previous_close"))
+            open_price = safe_float(self._extract_fast_info_field(info, "open"))
+            high = safe_float(self._extract_fast_info_field(info, "dayHigh", "day_high"))
+            low = safe_float(self._extract_fast_info_field(info, "dayLow", "day_low"))
+            volume = safe_int(self._extract_fast_info_field(info, "lastVolume", "last_volume", "volume"))
+            market_cap = safe_float(self._extract_fast_info_field(info, "marketCap", "market_cap"))
+        except Exception:
+            logger.debug(f"[Yfinance] fast_info 失败，尝试 history 方法: {user_code}")
+            hist = ticker.history(period="2d")
+            if hist.empty:
+                logger.warning(f"[Yfinance] 无法获取 {user_code} 的数据")
+                return None
+
+            today = hist.iloc[-1]
+            prev = hist.iloc[-2] if len(hist) > 1 else today
+            price = safe_float(today.get("Close"))
+            prev_close = safe_float(prev.get("Close"))
+            open_price = safe_float(today.get("Open"))
+            high = safe_float(today.get("High"))
+            low = safe_float(today.get("Low"))
+            volume = safe_int(today.get("Volume"))
+            market_cap = None
+
+        if price is None or price <= 0:
+            logger.warning(f"[Yfinance] {user_code} 缺少有效最新价，跳过")
+            return None
+
+        change_amount = None
+        change_pct = None
+        if prev_close is not None and prev_close > 0:
+            change_amount = price - prev_close
+            change_pct = (change_amount / prev_close) * 100
+
+        amplitude = None
+        if high is not None and low is not None and prev_close is not None and prev_close > 0:
+            amplitude = ((high - low) / prev_close) * 100
+
+        amount = None
+        if volume is not None and price is not None:
+            amount = float(volume) * price
+
+        try:
+            ticker_info = ticker.info
+            name = (
+                self._extract_fast_info_field(ticker_info, "shortName", "longName", "displayName")
+                or default_name
+                or user_code
+            )
+        except Exception:
+            name = default_name or user_code
+
+        return UnifiedRealtimeQuote(
+            code=user_code,
+            name=name,
+            source=RealtimeSource.YFINANCE,
+            price=price,
+            change_pct=round(change_pct, 2) if change_pct is not None else None,
+            change_amount=round(change_amount, 4) if change_amount is not None else None,
+            volume=volume,
+            amount=round(amount, 2) if amount is not None else None,
+            volume_ratio=None,
+            turnover_rate=None,
+            amplitude=round(amplitude, 2) if amplitude is not None else None,
+            open_price=open_price,
+            high=high,
+            low=low,
+            pre_close=prev_close,
+            pe_ratio=None,
+            pb_ratio=None,
+            total_mv=market_cap,
+            circ_mv=None,
+        )
+
     def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
         """
         获取美股/美股指数实时行情数据
@@ -488,104 +589,51 @@ class YfinanceFetcher(BaseFetcher):
         """
         import yfinance as yf
 
+        normalized_code = (stock_code or "").strip().upper()
+
         # 美股指数：使用映射（SPX -> ^GSPC）
-        yf_symbol, index_name = get_us_index_yf_symbol(stock_code)
+        yf_symbol, index_name = get_us_index_yf_symbol(normalized_code)
         if yf_symbol:
             return self._get_us_index_realtime_quote(
-                user_code=stock_code.strip().upper(),
+                user_code=normalized_code,
                 yf_symbol=yf_symbol,
                 index_name=index_name,
             )
 
-        # 仅处理美股股票
-        if not self._is_us_stock(stock_code):
-            logger.debug(f"[Yfinance] {stock_code} 不是美股，跳过")
+        try:
+            yf_code = self._convert_stock_code(normalized_code)
+            logger.debug(f"[Yfinance] 获取实时行情 {normalized_code} -> {yf_code}")
+            ticker = yf.Ticker(yf_code)
+            quote = self._build_realtime_quote_from_ticker(
+                ticker=ticker,
+                user_code=normalized_code,
+                default_name=normalized_code,
+            )
+            if quote is not None:
+                logger.info(f"[Yfinance] 获取 {normalized_code} 实时行情成功: 价格={quote.price}")
+            return quote
+        except Exception as e:
+            logger.warning(f"[Yfinance] 获取 {stock_code} 实时行情失败: {e}")
+            return None
+
+    def get_stock_name(self, stock_code: str) -> Optional[str]:
+        """Get stock/display name from Yahoo Finance metadata."""
+        import yfinance as yf
+
+        normalized_code = (stock_code or "").strip().upper()
+        if not normalized_code:
             return None
 
         try:
-            symbol = stock_code.strip().upper()
-            logger.debug(f"[Yfinance] 获取美股 {symbol} 实时行情")
-            
-            ticker = yf.Ticker(symbol)
-            
-            # 尝试获取 fast_info（更快，但字段较少）
-            try:
-                info = ticker.fast_info
-                if info is None:
-                    raise ValueError("fast_info is None")
-                
-                price = getattr(info, 'lastPrice', None) or getattr(info, 'last_price', None)
-                prev_close = getattr(info, 'previousClose', None) or getattr(info, 'previous_close', None)
-                open_price = getattr(info, 'open', None)
-                high = getattr(info, 'dayHigh', None) or getattr(info, 'day_high', None)
-                low = getattr(info, 'dayLow', None) or getattr(info, 'day_low', None)
-                volume = getattr(info, 'lastVolume', None) or getattr(info, 'last_volume', None)
-                market_cap = getattr(info, 'marketCap', None) or getattr(info, 'market_cap', None)
-                
-            except Exception:
-                # 回退到 history 方法获取最新数据
-                logger.debug(f"[Yfinance] fast_info 失败，尝试 history 方法")
-                hist = ticker.history(period='2d')
-                if hist.empty:
-                    logger.warning(f"[Yfinance] 无法获取 {symbol} 的数据")
-                    return None
-                
-                today = hist.iloc[-1]
-                prev = hist.iloc[-2] if len(hist) > 1 else today
-                
-                price = float(today['Close'])
-                prev_close = float(prev['Close'])
-                open_price = float(today['Open'])
-                high = float(today['High'])
-                low = float(today['Low'])
-                volume = int(today['Volume'])
-                market_cap = None
-            
-            # 计算涨跌幅
-            change_amount = None
-            change_pct = None
-            if price is not None and prev_close is not None and prev_close > 0:
-                change_amount = price - prev_close
-                change_pct = (change_amount / prev_close) * 100
-            
-            # 计算振幅
-            amplitude = None
-            if high is not None and low is not None and prev_close is not None and prev_close > 0:
-                amplitude = ((high - low) / prev_close) * 100
-            
-            # 获取股票名称
-            try:
-                name = ticker.info.get('shortName', '') or ticker.info.get('longName', '') or symbol
-            except Exception:
-                name = symbol
-            
-            quote = UnifiedRealtimeQuote(
-                code=symbol,
-                name=name,
-                source=RealtimeSource.FALLBACK,
-                price=price,
-                change_pct=round(change_pct, 2) if change_pct is not None else None,
-                change_amount=round(change_amount, 4) if change_amount is not None else None,
-                volume=volume,
-                amount=None,  # yfinance 不直接提供成交额
-                volume_ratio=None,
-                turnover_rate=None,
-                amplitude=round(amplitude, 2) if amplitude is not None else None,
-                open_price=open_price,
-                high=high,
-                low=low,
-                pre_close=prev_close,
-                pe_ratio=None,
-                pb_ratio=None,
-                total_mv=market_cap,
-                circ_mv=None,
-            )
-            
-            logger.info(f"[Yfinance] 获取美股 {symbol} 实时行情成功: 价格={price}")
-            return quote
-            
+            yf_code = self._convert_stock_code(normalized_code)
+            ticker = yf.Ticker(yf_code)
+            ticker_info = ticker.info
+            name = self._extract_fast_info_field(ticker_info, "shortName", "longName", "displayName")
+            if isinstance(name, str):
+                name = name.strip()
+            return name or None
         except Exception as e:
-            logger.warning(f"[Yfinance] 获取美股 {stock_code} 实时行情失败: {e}")
+            logger.debug(f"[Yfinance] 获取股票名称失败 {stock_code}: {e}")
             return None
 
 

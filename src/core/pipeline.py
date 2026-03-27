@@ -31,8 +31,10 @@ from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from src.core.analysis_delivery import AnalysisDeliveryService
 from src.core.analysis_engine_router import AnalysisEngineRouter
+from src.core.analysis_inputs import ParallelAnalysisInputCollector
 from src.core.analysis_persistence import AnalysisPersistenceService
 from src.core.intel_coordinator import IntelCoordinator
+from src.core.analysis_quality import AnalysisQualityGuard, StageLatencyRecorder
 from src.core.trading_calendar import get_market_for_stock, is_market_open
 from bot.models import BotMessage
 from utils.log_utils import build_log_context
@@ -105,6 +107,9 @@ class StockAnalysisPipeline:
             persistence=self.persistence,
             build_query_context=self._build_query_context,
         )
+        self.input_collector = ParallelAnalysisInputCollector(logger=logger)
+        self.quality_guard = AnalysisQualityGuard(config=self.config, logger=logger)
+        self.stage_latency_recorder = StageLatencyRecorder(logger=logger)
         
         init_context = build_log_context(query_id=self.query_id, query_source=self.query_source)
         logger.info(f"{init_context} 调度器初始化完成，最大并发数: {self.max_workers}")
@@ -226,40 +231,32 @@ class StockAnalysisPipeline:
                 # 获取股票名称（优先从实时行情获取真实名称）
                 stock_name = STOCK_NAME_MAP.get(code, '')
 
-                # Step 1: 获取实时行情（量比、换手率等）- 使用统一入口，自动故障切换
-                realtime_quote = None
-                try:
-                    realtime_quote = self.fetcher_manager.get_realtime_quote(code)
-                    if realtime_quote:
-                        # 使用实时行情返回的真实股票名称
-                        if realtime_quote.name:
-                            stock_name = realtime_quote.name
-                        # 兼容不同数据源的字段（有些数据源可能没有 volume_ratio）
-                        volume_ratio = getattr(realtime_quote, 'volume_ratio', None)
-                        turnover_rate = getattr(realtime_quote, 'turnover_rate', None)
-                        logger.info(f"[{code}] {stock_name} 实时行情: 价格={realtime_quote.price}, "
-                                  f"量比={volume_ratio}, 换手率={turnover_rate}% "
-                                  f"(来源: {realtime_quote.source.value if hasattr(realtime_quote, 'source') else 'unknown'})")
-                    else:
-                        logger.info(f"[{code}] 实时行情获取失败或已禁用，将使用历史数据进行分析")
-                except Exception as e:
-                    logger.warning(f"[{code}] 获取实时行情失败: {e}")
+                # Step 1 & 2: 并行获取实时行情与筹码分布（减少单股分析首段等待）
+                realtime_quote, chip_data = self._fetch_enhanced_market_data(code)
 
-                # 如果还是没有名称，使用代码作为名称
+                if realtime_quote:
+                    if realtime_quote.name:
+                        stock_name = realtime_quote.name
+                    volume_ratio = getattr(realtime_quote, 'volume_ratio', None)
+                    turnover_rate = getattr(realtime_quote, 'turnover_rate', None)
+                    logger.info(
+                        f"[{code}] {stock_name} 实时行情: 价格={realtime_quote.price}, "
+                        f"量比={volume_ratio}, 换手率={turnover_rate}% "
+                        f"(来源: {realtime_quote.source.value if hasattr(realtime_quote, 'source') else 'unknown'})"
+                    )
+                else:
+                    logger.info(f"[{code}] 实时行情获取失败或已禁用，将使用历史数据进行分析")
+
+                if chip_data:
+                    logger.info(
+                        f"[{code}] 筹码分布: 获利比例={chip_data.profit_ratio:.1%}, "
+                        f"90%集中度={chip_data.concentration_90:.2%}"
+                    )
+                else:
+                    logger.debug(f"[{code}] 筹码分布获取失败或已禁用")
+
                 if not stock_name:
                     stock_name = f'股票{code}'
-
-                # Step 2: 获取筹码分布 - 使用统一入口，带熔断保护
-                chip_data = None
-                try:
-                    chip_data = self.fetcher_manager.get_chip_distribution(code)
-                    if chip_data:
-                        logger.info(f"[{code}] 筹码分布: 获利比例={chip_data.profit_ratio:.1%}, "
-                                  f"90%集中度={chip_data.concentration_90:.2%}")
-                    else:
-                        logger.debug(f"[{code}] 筹码分布获取失败或已禁用")
-                except Exception as e:
-                    logger.warning(f"[{code}] 获取筹码分布失败: {e}")
 
                 result = self.engine_router.route(
                     code=code,
@@ -290,6 +287,34 @@ class StockAnalysisPipeline:
                 logger.exception(f"[{code}] 详细错误信息:")
                 return None
 
+    def _fetch_enhanced_market_data(self, code: str) -> Tuple[Any, Optional[ChipDistribution]]:
+        """
+        Fetch realtime quote and chip distribution concurrently for one stock.
+        """
+        realtime_quote = None
+        chip_data = None
+        tasks = {}
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            if self.config.enable_realtime_quote:
+                tasks["realtime_quote"] = executor.submit(self.fetcher_manager.get_realtime_quote, code)
+            if self.config.enable_chip_distribution:
+                tasks["chip_distribution"] = executor.submit(self.fetcher_manager.get_chip_distribution, code)
+
+            for task_name, future in tasks.items():
+                try:
+                    value = future.result()
+                    if task_name == "realtime_quote":
+                        realtime_quote = value
+                    else:
+                        chip_data = value
+                except Exception as exc:
+                    if task_name == "realtime_quote":
+                        logger.warning(f"[{code}] 获取实时行情失败: {exc}")
+                    else:
+                        logger.warning(f"[{code}] 获取筹码分布失败: {exc}")
+
+        return realtime_quote, chip_data
+
     def _analyze_with_standard_engine(
         self,
         code: str,
@@ -301,31 +326,15 @@ class StockAnalysisPipeline:
     ) -> Optional[AnalysisResult]:
         """Run the standard analysis engine using local pipeline dependencies."""
         try:
-            # Step 3: 趋势分析（基于交易理念）
-            trend_result: Optional[TrendAnalysisResult] = None
-            try:
-                end_date = date.today()
-                start_date = end_date - timedelta(days=89)  # ~60 trading days for MA60
-                historical_bars = self.persistence.get_data_range(code, start_date, end_date)
-                if historical_bars:
-                    df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
-                    # Issue #234: Augment with realtime for intraday MA calculation
-                    if self.config.enable_realtime_quote and realtime_quote:
-                        df = self._augment_historical_with_realtime(df, realtime_quote, code)
-                    trend_result = self.trend_analyzer.analyze(df, code)
-                    logger.info(f"[{code}] 趋势分析: {trend_result.trend_status.value}, "
-                              f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
-            except Exception as e:
-                logger.warning(f"[{code}] 趋势分析失败: {e}", exc_info=True)
-            
-            # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
-            news_context = self.intel_coordinator.collect_comprehensive_intel(
+            stage_started_at = time.perf_counter()
+            trend_result, news_context = self._collect_parallel_analysis_inputs(
                 code=code,
                 stock_name=stock_name,
                 query_id=query_id,
-                max_searches=5,
+                realtime_quote=realtime_quote,
             )
-            
+            self._log_stage_latency(code=code, stage_name="inputs_parallel", started_at=stage_started_at)
+
             # Step 5: 获取分析上下文（技术面数据）
             context = self.persistence.get_analysis_context(code)
             
@@ -350,13 +359,25 @@ class StockAnalysisPipeline:
             )
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
+            llm_started_at = time.perf_counter()
             result = self.analyzer.analyze(enhanced_context, news_context=news_context)
+            self._log_stage_latency(code=code, stage_name="llm_analyze", started_at=llm_started_at)
 
             # Step 7.5: 填充分析时的价格信息到 result
             if result:
                 realtime_data = enhanced_context.get('realtime', {})
                 result.current_price = realtime_data.get('price')
                 result.change_pct = realtime_data.get('change_pct')
+                # Reuse already loaded context date in stale-data guard to avoid extra DB lookup.
+                result.context_date_hint = enhanced_context.get("date") or context.get("date")
+                self._apply_data_completeness_guard(
+                    result=result,
+                    code=code,
+                    context=enhanced_context,
+                    trend_result=trend_result,
+                    news_context=news_context,
+                    realtime_quote=realtime_quote,
+                )
 
             # Step 8: 保存分析历史记录
             if result:
@@ -383,6 +404,98 @@ class StockAnalysisPipeline:
             logger.error(f"[{code}] 标准分析失败: {e}")
             logger.exception(f"[{code}] 标准分析详细错误信息:")
             return None
+
+    def _log_stage_latency(self, *, code: str, stage_name: str, started_at: float) -> None:
+        """Log stage latency for pipeline bottleneck diagnosis."""
+        self._get_stage_latency_recorder().log(
+            code=code,
+            stage_name=stage_name,
+            started_at=started_at,
+        )
+
+    def _get_stage_latency_recorder(self) -> StageLatencyRecorder:
+        """Return stage latency recorder, creating a fallback instance for tests."""
+        recorder = getattr(self, "stage_latency_recorder", None)
+        if recorder is None:
+            recorder = StageLatencyRecorder(logger=logger)
+            self.stage_latency_recorder = recorder
+        return recorder
+
+    def _collect_parallel_analysis_inputs(
+        self,
+        *,
+        code: str,
+        stock_name: str,
+        query_id: str,
+        realtime_quote: Any,
+    ) -> Tuple[Optional[TrendAnalysisResult], str]:
+        """Collect trend and intel inputs concurrently to reduce critical path latency."""
+        return self._get_input_collector().collect(
+            code=code,
+            trend_task=lambda: self._build_trend_result(code=code, realtime_quote=realtime_quote),
+            intel_task=lambda: self.intel_coordinator.collect_comprehensive_intel(
+                code=code,
+                stock_name=stock_name,
+                query_id=query_id,
+                max_searches=5,
+            ),
+            log_stage_latency=lambda stage, started_at: self._log_stage_latency(
+                code=code,
+                stage_name=stage,
+                started_at=started_at,
+            ),
+        )
+
+    def _get_input_collector(self) -> ParallelAnalysisInputCollector:
+        """Return input collector, creating a fallback instance for tests."""
+        collector = getattr(self, "input_collector", None)
+        if collector is None:
+            collector = ParallelAnalysisInputCollector(logger=logger)
+            self.input_collector = collector
+        return collector
+
+    def _build_trend_result(
+        self,
+        *,
+        code: str,
+        realtime_quote: Any,
+    ) -> Optional[TrendAnalysisResult]:
+        """Build trend analysis result from historical bars and optional realtime quote."""
+        end_date = date.today()
+        start_date = end_date - timedelta(days=89)
+        historical_bars = self.persistence.get_data_range(code, start_date, end_date)
+        if not historical_bars:
+            return None
+
+        df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
+        if self.config.enable_realtime_quote and realtime_quote:
+            df = self._augment_historical_with_realtime(df, realtime_quote, code)
+        trend_result = self.trend_analyzer.analyze(df, code)
+        logger.info(
+            f"[{code}] 趋势分析: {trend_result.trend_status.value}, "
+            f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}"
+        )
+        return trend_result
+
+    def _apply_data_completeness_guard(
+        self,
+        *,
+        result: AnalysisResult,
+        code: str,
+        context: Dict[str, Any],
+        trend_result: Optional[TrendAnalysisResult],
+        news_context: str,
+        realtime_quote: Any,
+    ) -> None:
+        """Downgrade confidence when key data dimensions are missing."""
+        self._get_quality_guard().apply_data_completeness_guard(
+            result=result,
+            code=code,
+            context=context,
+            trend_result=trend_result,
+            news_context=news_context,
+            realtime_quote=realtime_quote,
+        )
 
     def _enhance_context(
         self,
@@ -884,6 +997,16 @@ class StockAnalysisPipeline:
             result = self.analyze_stock(code, report_type, query_id=effective_query_id)
             
             if result:
+                data_age_days = self._get_data_age_days(
+                    code,
+                    context_date_hint=getattr(result, "context_date_hint", None),
+                )
+                self._apply_stale_data_guard(
+                    result=result,
+                    code=code,
+                    data_age_days=data_age_days,
+                    fetch_success=success,
+                )
                 logger.info(
                     f"[{code}] 分析完成: {result.operation_advice}, "
                     f"评分 {result.sentiment_score}"
@@ -909,6 +1032,41 @@ class StockAnalysisPipeline:
             # 捕获所有异常，确保单股失败不影响整体
             logger.exception(f"[{code}] 处理过程发生未知异常: {e}")
             return None
+
+    def _get_data_age_days(self, code: str, context_date_hint: Any = None) -> Optional[int]:
+        """Return age in days for latest available context date."""
+        if context_date_hint not in (None, ""):
+            return self._get_quality_guard().compute_data_age_days_from_context_date(
+                context_date_hint,
+                code=code,
+            )
+        return self._get_quality_guard().get_data_age_days(code=code, persistence=self.persistence)
+
+    def _apply_stale_data_guard(
+        self,
+        *,
+        result: AnalysisResult,
+        code: str,
+        data_age_days: Optional[int],
+        fetch_success: bool,
+    ) -> None:
+        """
+        Downgrade advice when market data is stale to reduce false confidence.
+        """
+        self._get_quality_guard().apply_stale_data_guard(
+            result=result,
+            code=code,
+            data_age_days=data_age_days,
+            fetch_success=fetch_success,
+        )
+
+    def _get_quality_guard(self) -> AnalysisQualityGuard:
+        """Return quality guard, creating a fallback instance for tests."""
+        guard = getattr(self, "quality_guard", None)
+        if guard is None:
+            guard = AnalysisQualityGuard(config=getattr(self, "config", None), logger=logger)
+            self.quality_guard = guard
+        return guard
     
     def run(
         self,
