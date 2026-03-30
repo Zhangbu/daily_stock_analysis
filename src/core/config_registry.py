@@ -66,7 +66,7 @@ _CATEGORY_DEFINITIONS: List[Dict[str, Any]] = [
 _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "STOCK_LIST": {
         "title": "Stock List",
-        "description": "Comma-separated watchlist stock codes.",
+        "description": "Comma-separated A-share watchlist stock codes.",
         "category": "base",
         "data_type": "array",
         "ui_control": "textarea",
@@ -77,6 +77,34 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "options": [],
         "validation": {"min_items": 1},
         "display_order": 10,
+    },
+    "HK_STOCK_LIST": {
+        "title": "HK Stock List",
+        "description": "Comma-separated Hong Kong watchlist stock codes.",
+        "category": "base",
+        "data_type": "array",
+        "ui_control": "textarea",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "",
+        "options": [],
+        "validation": {"delimiter": ",", "multi_value": True},
+        "display_order": 11,
+    },
+    "US_STOCK_LIST": {
+        "title": "US Stock List",
+        "description": "Comma-separated US watchlist stock codes.",
+        "category": "base",
+        "data_type": "array",
+        "ui_control": "textarea",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "",
+        "options": [],
+        "validation": {"delimiter": ",", "multi_value": True},
+        "display_order": 12,
     },
     "TUSHARE_TOKEN": {
         "title": "Tushare Token",
@@ -864,7 +892,7 @@ def _is_sensitive_key(key: str) -> bool:
 
 
 def _infer_category(key: str) -> str:
-    if key == "STOCK_LIST":
+    if key in {"STOCK_LIST", "HK_STOCK_LIST", "US_STOCK_LIST"}:
         return "base"
     if key.startswith("BACKTEST_"):
         return "backtest"
@@ -917,7 +945,7 @@ def _infer_data_type(key: str, value_hint: Optional[str]) -> str:
     except (TypeError, ValueError):
         pass
 
-    if key in {"STOCK_LIST", "EMAIL_RECEIVERS"}:
+    if key in {"STOCK_LIST", "HK_STOCK_LIST", "US_STOCK_LIST", "EMAIL_RECEIVERS"}:
         return "array"
     return "string"
 

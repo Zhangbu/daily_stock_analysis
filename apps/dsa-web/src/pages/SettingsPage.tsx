@@ -24,7 +24,7 @@ function getCategoryHints(category: string): SettingsHint[] {
       },
       {
         title: '港股后台同步',
-        body: 'MARKET_SYNC_MARKETS 现在支持 cn,hk,us。港股同步按 STOCK_LIST 中的港股代码执行，不需要额外建一套港股列表。',
+        body: 'MARKET_SYNC_MARKETS 现在支持 cn,hk,us。建议把港股统一放到 HK_STOCK_LIST 中，后台同步会优先使用港股独立股票池。',
       },
       {
         title: '旧数据自动降级',

@@ -564,6 +564,10 @@ class GeminiAnalyzer:
 3. **精确狙击点**：必须给出具体价格，不说模糊的话
 4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
 5. **风险优先级**：舆情中的风险点要醒目标出"""
+    _MAX_PROMPT_NEWS_CHARS = 1800
+    _MAX_PROMPT_NEWS_LINES = 18
+    _MAX_PROMPT_BULLET_ITEMS = 3
+    _MAX_PROMPT_ITEM_CHARS = 90
 
     def __init__(self, api_key: Optional[str] = None):
         """
@@ -1183,7 +1187,12 @@ class GeminiAnalyzer:
         stock_name = context.get('stock_name', name)
         if not stock_name or stock_name == f'股票{code}':
             stock_name = STOCK_NAME_MAP.get(code, f'股票{code}')
-            
+
+        compact_news_context = self._compact_news_context(news_context)
+        trend = context.get('trend_analysis') or {}
+        signal_reasons = self._compact_prompt_items(trend.get('signal_reasons'))
+        risk_factors = self._compact_prompt_items(trend.get('risk_factors'))
+
         today = context.get('today', {})
         
         # ========== 构建决策仪表盘格式的输入 ==========
@@ -1253,8 +1262,7 @@ class GeminiAnalyzer:
 """
         
         # 添加趋势分析结果（基于交易理念的预判）
-        if 'trend_analysis' in context:
-            trend = context['trend_analysis']
+        if trend:
             bias_warning = "🚨 超过5%，严禁追高！" if trend.get('bias_ma5', 0) > 5 else "✅ 安全范围"
             prompt += f"""
 ### 趋势分析预判（基于交易理念）
@@ -1271,10 +1279,10 @@ class GeminiAnalyzer:
 
 #### 系统分析理由
 **买入理由**：
-{chr(10).join('- ' + r for r in trend.get('signal_reasons', ['无'])) if trend.get('signal_reasons') else '- 无'}
+{chr(10).join('- ' + r for r in signal_reasons) if signal_reasons else '- 无'}
 
 **风险因素**：
-{chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
+{chr(10).join('- ' + r for r in risk_factors) if risk_factors else '- 无'}
 """
         
         # 添加昨日对比数据
@@ -1292,7 +1300,7 @@ class GeminiAnalyzer:
 
 ## 📰 舆情情报
 """
-        if news_context:
+        if compact_news_context:
             prompt += f"""
 以下是 **{stock_name}({code})** 近7日的新闻搜索结果，请重点提取：
 1. 🚨 **风险警报**：减持、处罚、利空
@@ -1300,7 +1308,7 @@ class GeminiAnalyzer:
 3. 📊 **业绩预期**：年报预告、业绩快报
 
 ```
-{news_context}
+{compact_news_context}
 ```
 """
         else:
@@ -1355,7 +1363,44 @@ class GeminiAnalyzer:
 请输出完整的 JSON 格式决策仪表盘。"""
         
         return prompt
-    
+
+    def _compact_prompt_items(self, items: Optional[List[str]]) -> List[str]:
+        """Clip long bullet lists before they enter the LLM prompt."""
+        if not items:
+            return []
+
+        compact_items: List[str] = []
+        for item in items[:self._MAX_PROMPT_BULLET_ITEMS]:
+            text = str(item or '').strip()
+            if not text:
+                continue
+            compact_items.append(_clip_text(text, self._MAX_PROMPT_ITEM_CHARS))
+        return compact_items
+
+    def _compact_news_context(self, news_context: Optional[str]) -> Optional[str]:
+        """Trim verbose intel blocks to reduce prompt token usage."""
+        if not news_context:
+            return news_context
+
+        compact_lines: List[str] = []
+        for raw_line in str(news_context).splitlines():
+            line = raw_line.rstrip()
+            if not line.strip():
+                continue
+            stripped = line.strip()
+            if stripped.startswith(tuple(str(i) for i in range(1, 10))):
+                compact_lines.append(_clip_text(line, 100))
+            elif line.startswith('     '):
+                compact_lines.append(_clip_text(line, 110))
+            else:
+                compact_lines.append(_clip_text(line, 80))
+
+            if len(compact_lines) >= self._MAX_PROMPT_NEWS_LINES:
+                break
+
+        compact_text = '\n'.join(compact_lines)
+        return _clip_text(compact_text, self._MAX_PROMPT_NEWS_CHARS)
+
     def _format_volume(self, volume: Optional[float]) -> str:
         """格式化成交量显示"""
         if volume is None:

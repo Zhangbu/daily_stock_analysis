@@ -10,11 +10,14 @@
 ### 修复（#patch）
 - Telegram 推送新增独立 SSL 配置：支持 `TELEGRAM_CA_BUNDLE` 指定证书链，或用 `TELEGRAM_VERIFY_SSL=false` 在可信环境临时排障；遇到 `CERTIFICATE_VERIFY_FAILED` 时不再盲目重试 3 次，而是直接输出可操作提示。
 - `TushareFetcher` 初始化改为直接调用 `ts.pro_api(TOKEN)`，不再触发 SDK 将 token 写入 `~/tk.csv`；测试/只读沙箱环境下可避免无关的 `Read-only file system` 噪音日志。
-- 市场同步配置新增 `hk` 市场支持：`MARKET_SYNC_MARKETS` 与 `/api/v1/system/market-sync/*` 请求参数现在都可接受 `cn/hk/us`；港股同步按 `STOCK_LIST` 中的港股代码执行，便于直接结合 Yahoo Finance 日线能力补齐港股本地库。
+- 股票池配置拆分为三市场独立管理：`STOCK_LIST` 现在用于 A股，新增 `HK_STOCK_LIST` 管理港股，`US_STOCK_LIST` 管理美股；运行时分析会自动合并三份股票池，并兼容旧配置里仍混放在 `STOCK_LIST` 的港股/美股代码。
+- 市场同步配置新增 `hk` 市场支持：`MARKET_SYNC_MARKETS` 与 `/api/v1/system/market-sync/*` 请求参数现在都可接受 `cn/hk/us`；港股同步优先读取 `HK_STOCK_LIST`，同时兼容旧配置中仍写在 `STOCK_LIST` 的港股代码。
 - Yahoo Finance 接入从“仅美股/美股指数实时行情”扩展为可覆盖 A股/港股/美股统一入口；当 `REALTIME_SOURCE_PRIORITY` 中显式包含 `yfinance` 时，可作为港股/A股实时行情兜底源使用，名称解析也可直接回落到 Yahoo 元数据。
 - 系统配置 `core` 视图补齐实时行情与市场同步关键项：`ENABLE_REALTIME_QUOTE`、`MARKET_SYNC_*` 现在会在 `/api/v1/system/config?profile=core` 与对应 schema 中一并返回，便于前端直接配置 Yahoo/港股同步链路。
 - Web 设置页体验补强：`数据源` 与 `通知渠道` 分类新增配置提示卡片，常见关键字段会展示可直接参考的示例值，降低 `yfinance`、港股同步与 Telegram 证书相关配置的填写成本。
-- Web 设置页多值字段体验增强：`STOCK_LIST`、`US_STOCK_LIST`、`AGENT_SKILLS` 等多值配置支持逐项增删编辑，保存时会自动整理为逗号分隔格式，减少手工维护长字符串的出错概率。
+- Web 设置页多值字段体验增强：`STOCK_LIST`、`HK_STOCK_LIST`、`US_STOCK_LIST`、`AGENT_SKILLS` 等多值配置支持逐项增删编辑，保存时会自动整理为逗号分隔格式，减少手工维护长字符串的出错概率。
+- Web 设置页新增轻量级即时格式提示：`STOCK_LIST`、`HK_STOCK_LIST`、`US_STOCK_LIST`、`AGENT_SKILLS` 中明显异常的代码或策略标识会在输入时提示，减少误填后才在保存或运行阶段发现问题。
+- 情报摘要格式进一步收敛：多维情报报告默认每个维度仅保留前 2 条结果，摘要片段缩短到约 90 字，降低送入大模型时的 prompt token 消耗。
 - OpenAI 兼容接口在出现 `'ascii' codec can't encode` 错误时，会同时清洗 `SYSTEM_PROMPT` 与用户 prompt 中的表格线字符（如 `│`）后重试，避免 5 次重试均失败。
 - OpenAI 重试日志增强：补充模型名、token 参数模式、异常类型与截断错误信息，便于快速定位兼容性问题。
 - Agent 模式下 OpenAI 调用新增 ASCII 编码异常兜底：清洗 `messages/tools` 并在必要时使用 ASCII-safe 转义 payload 重试一次。

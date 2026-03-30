@@ -127,6 +127,7 @@ class SystemConfigApiTestCase(unittest.TestCase):
         payload = response.json()
         keys = {item["key"] for item in payload["items"]}
         self.assertIn("STOCK_LIST", keys)
+        self.assertIn("HK_STOCK_LIST", keys)
         self.assertIn("OPENAI_MODEL", keys)
         self.assertIn("EMAIL_SENDER", keys)
         self.assertIn("MARKET_SYNC_MARKETS", keys)
@@ -143,6 +144,7 @@ class SystemConfigApiTestCase(unittest.TestCase):
             for field in category["fields"]
         }
         self.assertIn("STOCK_LIST", keys)
+        self.assertIn("HK_STOCK_LIST", keys)
         self.assertIn("ENABLE_AGENT_API", keys)
         self.assertNotIn("LOG_LEVEL", keys)
 

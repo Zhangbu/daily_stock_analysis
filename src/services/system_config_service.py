@@ -53,6 +53,7 @@ _LOW_USAGE_LEGACY_KEYS: Set[str] = {
 
 _CORE_PROFILE_KEYS: Set[str] = {
     "STOCK_LIST",
+    "HK_STOCK_LIST",
     "US_STOCK_LIST",
     "TUSHARE_TOKEN",
     "GEMINI_API_KEY",

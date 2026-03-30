@@ -23,8 +23,9 @@ const categoryDescriptionMap: Partial<Record<SystemConfigCategory, string>> = {
 };
 
 const fieldTitleMap: Record<string, string> = {
-  STOCK_LIST: '自选股列表',
-  US_STOCK_LIST: '美股同步池',
+  STOCK_LIST: 'A股股票池',
+  HK_STOCK_LIST: '港股股票池',
+  US_STOCK_LIST: '美股股票池',
   TUSHARE_TOKEN: 'Tushare Token',
   TAVILY_API_KEYS: 'Tavily API Keys',
   SERPAPI_API_KEYS: 'SerpAPI API Keys',
@@ -73,8 +74,9 @@ const fieldTitleMap: Record<string, string> = {
 };
 
 const fieldDescriptionMap: Record<string, string> = {
-  STOCK_LIST: '使用逗号分隔股票代码，例如：600519,300750。',
-  US_STOCK_LIST: '额外参与美股同步或筛选的股票池，例如：AAPL,MSFT,NVDA。',
+  STOCK_LIST: 'A股股票池，使用逗号分隔股票代码，例如：600519,300750。',
+  HK_STOCK_LIST: '港股股票池，使用逗号分隔股票代码，例如：hk00700,HK09988。',
+  US_STOCK_LIST: '美股股票池，使用逗号分隔股票代码，例如：AAPL,MSFT,NVDA。',
   TUSHARE_TOKEN: '用于接入 Tushare Pro 数据服务的凭据。',
   TAVILY_API_KEYS: '用于新闻检索的 Tavily 密钥，支持逗号分隔多个。',
   SERPAPI_API_KEYS: '用于新闻检索的 SerpAPI 密钥，支持逗号分隔多个。',
@@ -123,7 +125,8 @@ const fieldDescriptionMap: Record<string, string> = {
 };
 
 const fieldExampleMap: Record<string, string> = {
-  STOCK_LIST: '600519,300750,00700.HK',
+  STOCK_LIST: '600519,300750,002594',
+  HK_STOCK_LIST: 'hk00700,HK09988',
   US_STOCK_LIST: 'AAPL,MSFT,NVDA',
   REALTIME_SOURCE_PRIORITY: 'tencent,akshare_sina,efinance,akshare_em,yfinance',
   ANALYSIS_STALE_DAYS_LIMIT: '3',

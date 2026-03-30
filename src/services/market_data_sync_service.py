@@ -80,6 +80,25 @@ class MarketDataSyncService:
         with self._lock:
             return self._status.to_dict()
 
+    def _get_all_watchlist_codes(self) -> List[str]:
+        """Return merged watchlist codes with backward compatibility for tests and legacy config."""
+        if hasattr(self.config, "all_stock_list"):
+            return list(self.config.all_stock_list)
+
+        merged: List[str] = []
+        seen = set()
+        for code in [
+            *getattr(self.config, "stock_list", []),
+            *getattr(self.config, "hk_stock_list", []),
+            *getattr(self.config, "us_stock_list", []),
+        ]:
+            normalized = str(code).strip().upper()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(normalized)
+        return merged
+
     def start_background_sync(self, markets: Optional[Sequence[str]] = None) -> bool:
         """Start a background sync if no sync is currently running."""
         with self._lock:
@@ -109,7 +128,7 @@ class MarketDataSyncService:
         try:
             priority_codes = {
                 str(code).strip().upper()
-                for code in self.config.stock_list
+                for code in self._get_all_watchlist_codes()
                 if get_market_for_stock(code) in set(markets)
             }
             self._set_status(priority_candidates=len(priority_codes))
@@ -221,13 +240,15 @@ class MarketDataSyncService:
 
     def _get_us_universe(self) -> List[str]:
         """Build US universe from watchlist plus configured extra symbols."""
-        watchlist = [code for code in self.config.stock_list if get_market_for_stock(code) == "us"]
+        watchlist = [code for code in self._get_all_watchlist_codes() if get_market_for_stock(code) == "us"]
         configured = [code for code in self.config.us_stock_list if code]
         return self._prioritize_codes(watchlist, configured)
 
     def _get_hk_universe(self) -> List[str]:
-        """Build HK universe from watchlist only."""
-        return [code for code in self.config.stock_list if get_market_for_stock(code) == "hk"]
+        """Build HK universe from explicit HK pool with legacy watchlist fallback."""
+        watchlist = [code for code in self._get_all_watchlist_codes() if get_market_for_stock(code) == "hk"]
+        configured = [code for code in getattr(self.config, "hk_stock_list", []) if code]
+        return self._prioritize_codes(watchlist, configured)
 
     def _fetch_cn_stock_list(self) -> Optional[pd.DataFrame]:
         """Fetch A-share stock universe from available providers."""

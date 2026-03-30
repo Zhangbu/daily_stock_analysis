@@ -50,6 +50,7 @@ class Config:
     
     # === 自选股配置 ===
     stock_list: List[str] = field(default_factory=list)
+    hk_stock_list: List[str] = field(default_factory=list)
     us_stock_list: List[str] = field(default_factory=list)
 
     # === 飞书云文档配置 ===
@@ -390,16 +391,20 @@ class Config:
                 os.environ['https_proxy'] = https_proxy
 
         
-        # 解析自选股列表（逗号分隔，统一为大写 Issue #355）
-        stock_list_str = os.getenv('STOCK_LIST', '')
-        stock_list = [
-            (c or "").strip().upper()
-            for c in stock_list_str.split(',')
-            if (c or "").strip()
-        ]
-        
+        def _parse_upper_list(raw: str) -> List[str]:
+            return [
+                (c or "").strip().upper()
+                for c in raw.split(',')
+                if (c or "").strip()
+            ]
+
+        # 解析分市场自选股列表（逗号分隔，统一为大写）
+        stock_list = _parse_upper_list(os.getenv('STOCK_LIST', ''))
+        hk_stock_list = _parse_upper_list(os.getenv('HK_STOCK_LIST', ''))
+        us_stock_list = _parse_upper_list(os.getenv('US_STOCK_LIST', ''))
+
         # 如果没有配置，使用默认的示例股票
-        if not stock_list:
+        if not stock_list and not hk_stock_list and not us_stock_list:
             stock_list = ['600519', '000001', '300750']
         
         # 解析搜索引擎 API Keys（支持多个 key，逗号分隔）
@@ -430,11 +435,8 @@ class Config:
         
         return cls(
             stock_list=stock_list,
-            us_stock_list=[
-                (c or "").strip().upper()
-                for c in os.getenv('US_STOCK_LIST', '').split(',')
-                if (c or "").strip()
-            ],
+            hk_stock_list=hk_stock_list,
+            us_stock_list=us_stock_list,
             feishu_app_id=os.getenv('FEISHU_APP_ID'),
             feishu_app_secret=os.getenv('FEISHU_APP_SECRET'),
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),
@@ -698,30 +700,58 @@ class Config:
         env_file = os.getenv("ENV_FILE")
         env_path = Path(env_file) if env_file else (Path(__file__).parent.parent / '.env')
         stock_list_str = ''
+        hk_stock_list_str = ''
+        us_stock_list_str = ''
         if env_path.exists():
             # 直接从 .env 文件读取最新的配置
             env_values = dotenv_values(env_path)
             stock_list_str = (env_values.get('STOCK_LIST') or '').strip()
+            hk_stock_list_str = (env_values.get('HK_STOCK_LIST') or '').strip()
+            us_stock_list_str = (env_values.get('US_STOCK_LIST') or '').strip()
 
         # 如果 .env 文件不存在或未配置，才尝试从系统环境变量读取
         if not stock_list_str:
             stock_list_str = os.getenv('STOCK_LIST', '')
+        if not hk_stock_list_str:
+            hk_stock_list_str = os.getenv('HK_STOCK_LIST', '')
+        if not us_stock_list_str:
+            us_stock_list_str = os.getenv('US_STOCK_LIST', '')
 
         stock_list = [
             (c or "").strip().upper()
             for c in stock_list_str.split(',')
             if (c or "").strip()
         ]
+        hk_stock_list = [
+            (c or "").strip().upper()
+            for c in hk_stock_list_str.split(',')
+            if (c or "").strip()
+        ]
+        us_stock_list = [
+            (c or "").strip().upper()
+            for c in us_stock_list_str.split(',')
+            if (c or "").strip()
+        ]
 
-        if not stock_list:
+        if not stock_list and not hk_stock_list and not us_stock_list:
             stock_list = ['000001']
 
         self.stock_list = stock_list
-        self.us_stock_list = [
-            (c or "").strip().upper()
-            for c in os.getenv('US_STOCK_LIST', '').split(',')
-            if (c or "").strip()
-        ]
+        self.hk_stock_list = hk_stock_list
+        self.us_stock_list = us_stock_list
+
+    @property
+    def all_stock_list(self) -> List[str]:
+        """Return merged watchlist across CN/HK/US pools, preserving order."""
+        merged: List[str] = []
+        seen = set()
+        for code in [*self.stock_list, *self.hk_stock_list, *self.us_stock_list]:
+            normalized = (code or "").strip().upper()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(normalized)
+        return merged
     
     def validate(self) -> List[str]:
         """
@@ -732,8 +762,8 @@ class Config:
         """
         warnings = []
         
-        if not self.stock_list:
-            warnings.append("警告：未配置自选股列表 (STOCK_LIST)")
+        if not self.all_stock_list:
+            warnings.append("警告：未配置自选股列表 (STOCK_LIST / HK_STOCK_LIST / US_STOCK_LIST)")
         
         if not self.tushare_token:
             warnings.append("提示：未配置 Tushare Token，将使用其他数据源")
@@ -761,7 +791,7 @@ class Config:
     def grouped_fields(self) -> Dict[str, List[str]]:
         """Return config fields grouped by responsibility."""
         return {
-            "stocks": ["stock_list", "us_stock_list"],
+            "stocks": ["stock_list", "hk_stock_list", "us_stock_list"],
             "ai": [
                 "gemini_api_key", "gemini_model", "gemini_model_fallback", "gemini_temperature",
                 "anthropic_api_key", "anthropic_model", "anthropic_temperature", "anthropic_max_tokens",

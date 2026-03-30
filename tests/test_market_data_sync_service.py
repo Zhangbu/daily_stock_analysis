@@ -15,6 +15,7 @@ class MarketDataSyncServiceTestCase(unittest.TestCase):
     def test_get_hk_universe_uses_watchlist(self) -> None:
         config = SimpleNamespace(
             stock_list=["hk00700", "600519", "HK09988", "AAPL"],
+            hk_stock_list=[],
             us_stock_list=[],
             market_sync_markets=["hk"],
             market_sync_a_share_full_enabled=False,
@@ -27,11 +28,30 @@ class MarketDataSyncServiceTestCase(unittest.TestCase):
 
         codes = service._get_hk_universe()
 
-        self.assertEqual(codes, ["hk00700", "HK09988"])
+        self.assertEqual(codes, ["HK00700", "HK09988"])
+
+    def test_get_hk_universe_prefers_hk_stock_list(self) -> None:
+        config = SimpleNamespace(
+            stock_list=["600519", "AAPL"],
+            hk_stock_list=["hk00700", "HK09988"],
+            us_stock_list=[],
+            market_sync_markets=["hk"],
+            market_sync_a_share_full_enabled=False,
+            market_sync_max_codes_per_run=0,
+            market_sync_sleep_seconds=0.0,
+            market_sync_historical_days=365,
+            market_sync_incremental_days=5,
+        )
+        service = MarketDataSyncService(db_manager=MagicMock(), config=config)
+
+        codes = service._get_hk_universe()
+
+        self.assertEqual(codes, ["HK00700", "HK09988"])
 
     def test_get_cn_universe_prioritizes_watchlist(self) -> None:
         config = SimpleNamespace(
             stock_list=["600519", "AAPL", "000001"],
+            hk_stock_list=[],
             us_stock_list=[],
             market_sync_markets=["cn"],
             market_sync_a_share_full_enabled=True,
@@ -54,6 +74,7 @@ class MarketDataSyncServiceTestCase(unittest.TestCase):
     def test_sync_single_code_skips_when_today_already_present(self) -> None:
         service = MarketDataSyncService(db_manager=MagicMock(), config=SimpleNamespace(
             stock_list=[],
+            hk_stock_list=[],
             us_stock_list=[],
             market_sync_markets=["cn"],
             market_sync_a_share_full_enabled=False,
@@ -79,6 +100,7 @@ class MarketDataSyncServiceTestCase(unittest.TestCase):
         db.save_daily_data.return_value = 2
         config = SimpleNamespace(
             stock_list=[],
+            hk_stock_list=[],
             us_stock_list=[],
             market_sync_markets=["cn"],
             market_sync_a_share_full_enabled=False,
@@ -101,6 +123,7 @@ class MarketDataSyncServiceTestCase(unittest.TestCase):
     def test_priority_watchlist_progress_is_tracked(self) -> None:
         config = SimpleNamespace(
             stock_list=["600519", "AAPL"],
+            hk_stock_list=["HK00700"],
             us_stock_list=["MSFT"],
             market_sync_markets=["cn", "us"],
             market_sync_a_share_full_enabled=False,
@@ -116,13 +139,14 @@ class MarketDataSyncServiceTestCase(unittest.TestCase):
         service._run_sync(["cn", "us"])
 
         status = service.get_status()
-        self.assertEqual(status["priority_candidates"], 2)
-        self.assertEqual(status["priority_processed"], 2)
-        self.assertEqual(status["priority_completed"], 2)
+        self.assertEqual(status["priority_candidates"], 3)
+        self.assertEqual(status["priority_processed"], 3)
+        self.assertEqual(status["priority_completed"], 3)
 
     def test_prioritize_by_freshness_prefers_missing_then_stale(self) -> None:
         config = SimpleNamespace(
             stock_list=[],
+            hk_stock_list=[],
             us_stock_list=[],
             market_sync_markets=["cn"],
             market_sync_a_share_full_enabled=False,

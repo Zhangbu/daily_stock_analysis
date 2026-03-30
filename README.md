@@ -134,8 +134,9 @@
 
 | Secret 名称 | 说明 | 必填 |
 |------------|------|:----:|
-| `STOCK_LIST` | 自选股代码，如 `600519,hk00700,AAPL,TSLA` | ✅ |
-| `US_STOCK_LIST` | 美股同步/筛选池，如 `AAPL,MSFT,NVDA` | 可选 |
+| `STOCK_LIST` | A股股票池，如 `600519,300750,002594` | ✅ |
+| `HK_STOCK_LIST` | 港股股票池，如 `hk00700,HK09988` | 可选 |
+| `US_STOCK_LIST` | 美股股票池，如 `AAPL,MSFT,NVDA` | 可选 |
 | `TAVILY_API_KEYS` | [Tavily](https://tavily.com/) 搜索 API（新闻搜索） | 推荐 |
 | `SERPAPI_API_KEYS` | [SerpAPI](https://serpapi.com/baidu-search-api?utm_source=github_daily_stock_analysis) 全渠道搜索 | 可选 |
 | `BOCHA_API_KEYS` | [博查搜索](https://open.bocha.cn/) Web Search API（中文搜索优化，支持AI摘要，多个key用逗号分隔） | 可选 |
@@ -190,13 +191,13 @@
 - 筛选页现在会展示市场同步状态、处理进度、错误数，并支持手动触发同步
 - 筛选页会额外显示“自选股优先完成度”，方便确认核心股票是否已先同步完
 - 数据库评分结果会展示 `Top 候选 / 排名 / 机会等级 / 因子分解（趋势、动量、回撤、量能、风险、胜率代理）`
-- 筛选结果支持一键导出候选池 CSV，并可直接把候选股票加入 `STOCK_LIST` 自选股列表
+- 筛选结果支持一键导出候选池 CSV，并可直接把候选股票加入对应市场的股票池
 - 候选池支持保存为快照，并在页面展示最近快照的平均跟踪收益
 - Top N 候选支持直接拉取最新分析摘要，方便把筛选结果快速转成操作关注名单
 - `实时筛选` 模式沿用原有实时行情链路
 - 启用 `MARKET_SYNC_ENABLED=true` 与 `MARKET_SYNC_ON_STARTUP=true` 后，服务启动会后台慢速同步市场数据
 - 市场同步会优先处理本地缺失或落后较多的股票，尽量减少对已最新数据的重复抓取
-- 当前 A股可开启全市场慢同步；港股按 `STOCK_LIST` 中的港股代码同步；美股按 `STOCK_LIST + US_STOCK_LIST` 配置池同步
+- 当前 A股可开启全市场慢同步；港股优先按 `HK_STOCK_LIST` 同步，并兼容旧配置中仍写在 `STOCK_LIST` 的港股代码；美股按 `US_STOCK_LIST` 与兼容池中的美股代码同步
 
 ### 方式二：本地运行 / Docker 部署
 
@@ -278,7 +279,7 @@ python main.py
 
 **可选密码保护**：在 `.env` 中设置 `ADMIN_AUTH_ENABLED=true` 可启用 Web 登录，首次访问在网页设置初始密码，保护 Settings 中的 API 密钥等敏感配置。详见 [完整指南](docs/full-guide.md)。
 
-**设置页引导增强**：在 **设置 → 数据源 / 通知渠道** 中，页面会根据当前分类展示配置提示，并为常见字段提供示例值，方便快速填写 `REALTIME_SOURCE_PRIORITY`、`MARKET_SYNC_MARKETS`、`TELEGRAM_CA_BUNDLE` 等关键配置。像 `STOCK_LIST`、`US_STOCK_LIST`、`AGENT_SKILLS` 这类多值字段，也支持逐项增删编辑。
+**设置页引导增强**：在 **设置 → 数据源 / 通知渠道** 中，页面会根据当前分类展示配置提示，并为常见字段提供示例值，方便快速填写 `REALTIME_SOURCE_PRIORITY`、`MARKET_SYNC_MARKETS`、`TELEGRAM_CA_BUNDLE` 等关键配置。像 `STOCK_LIST`、`HK_STOCK_LIST`、`US_STOCK_LIST`、`AGENT_SKILLS` 这类多值字段，也支持逐项增删编辑，并会对明显异常的代码/策略标识给出即时格式提示。多维情报摘要也已做压缩，默认每个维度只保留更关键的前 2 条结果，减少大模型 token 开销。
 
 ### 从图片添加股票
 

@@ -525,11 +525,11 @@ class SearchService:
             lines.append(f"\n{dim_desc} (来源: {resp.provider}):")
             if resp.success and resp.results:
                 # 增加显示条数
-                for i, r in enumerate(resp.results[:4], 1):
+                for i, r in enumerate(resp.results[:2], 1):
                     date_str = f" [{r.published_date}]" if r.published_date else ""
                     lines.append(f"  {i}. {r.title}{date_str}")
                     # 如果摘要太短，可能信息量不足
-                    snippet = r.snippet[:150] if len(r.snippet) > 20 else r.snippet
+                    snippet = r.snippet[:90] if len(r.snippet) > 20 else r.snippet
                     lines.append(f"     {snippet}...")
             else:
                 lines.append("  未找到相关信息")

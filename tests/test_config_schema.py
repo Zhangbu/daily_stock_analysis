@@ -14,6 +14,7 @@ class ConfigSchemaTestCase(unittest.TestCase):
         self.assertIn("notification", groups)
         self.assertIn("api_features", groups)
         self.assertIn("runtime", groups)
+        self.assertIn("hk_stock_list", groups["stocks"])
         self.assertIn("market_data_cache_ttl", groups["runtime"])
         self.assertIn("enable_agent_api", groups["api_features"])
 

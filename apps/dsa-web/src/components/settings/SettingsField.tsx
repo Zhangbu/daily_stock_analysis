@@ -25,6 +25,81 @@ function serializeMultiValues(values: string[]): string {
   return values.map((entry) => entry.trim()).join(',');
 }
 
+function isValidStockListEntry(entry: string): boolean {
+  return /^\d{5,6}$/.test(entry);
+}
+
+function isValidHkStockEntry(entry: string): boolean {
+  return /^HK\d{5}$/i.test(entry) || /^\d{5}\.HK$/i.test(entry);
+}
+
+function isValidUsStockEntry(entry: string): boolean {
+  return /^[A-Z][A-Z0-9.-]{0,9}$/i.test(entry);
+}
+
+function isValidAgentSkillEntry(entry: string): boolean {
+  return /^all$/i.test(entry) || /^[a-z][a-z0-9_]*$/.test(entry);
+}
+
+function getLocalWarnings(item: SystemConfigItem, value: string): string[] {
+  const values = parseMultiValues(value).filter((entry) => entry.length > 0);
+  if (!values.length) {
+    return [];
+  }
+
+  if (item.key === 'STOCK_LIST') {
+    const invalidEntries = values.filter((entry) => !isValidStockListEntry(entry));
+    return invalidEntries.length
+      ? [`以下 A 股代码格式看起来不太对：${invalidEntries.join('、')}。常见写法如 600519、300750。`]
+      : [];
+  }
+
+  if (item.key === 'HK_STOCK_LIST') {
+    const invalidEntries = values.filter((entry) => !isValidHkStockEntry(entry));
+    return invalidEntries.length
+      ? [`以下港股代码格式看起来不太对：${invalidEntries.join('、')}。常见写法如 hk00700、00700.HK。`]
+      : [];
+  }
+
+  if (item.key === 'US_STOCK_LIST') {
+    const invalidEntries = values.filter((entry) => !isValidUsStockEntry(entry));
+    return invalidEntries.length
+      ? [`以下美股代码格式看起来不太对：${invalidEntries.join('、')}。常见写法如 AAPL、MSFT、BRK.B。`]
+      : [];
+  }
+
+  if (item.key === 'AGENT_SKILLS') {
+    const invalidEntries = values.filter((entry) => !isValidAgentSkillEntry(entry));
+    return invalidEntries.length
+      ? [`以下策略标识格式看起来不太对：${invalidEntries.join('、')}。建议使用小写字母加下划线，如 bull_trend。`]
+      : [];
+  }
+
+  return [];
+}
+
+function getRiskNotice(item: SystemConfigItem, value: string): string | null {
+  const normalizedValue = value.trim().toLowerCase();
+
+  if (item.key === 'TELEGRAM_VERIFY_SSL' && normalizedValue === 'false') {
+    return '已关闭 Telegram HTTPS 证书校验。这样虽然能临时绕过证书问题，但会降低连接安全性，只建议在可信网络中短期排障时使用。';
+  }
+
+  if (item.key === 'WEBHOOK_VERIFY_SSL' && normalizedValue === 'false') {
+    return '已关闭 Webhook HTTPS 证书校验。请确认目标服务位于可信内网或使用自签证书的受控环境中，避免把该配置长期暴露在公网场景。';
+  }
+
+  if (item.key === 'MARKET_SYNC_A_SHARE_FULL_ENABLED' && normalizedValue === 'true') {
+    return '已启用 A 股全市场慢同步。首次运行可能持续较久，并显著增加抓取请求量，建议结合休眠间隔和单次上限一起使用。';
+  }
+
+  if (item.key === 'REPORT_SUMMARY_ONLY' && normalizedValue === 'true') {
+    return '当前仅推送摘要，不包含个股详细结论。如果你依赖完整的买卖点、风险提示和新闻细节，请谨慎开启。';
+  }
+
+  return null;
+}
+
 interface SettingsFieldProps {
   item: SystemConfigItem;
   value: string;
@@ -242,6 +317,8 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
   const description = getFieldDescriptionZh(item.key);
   const example = getFieldExampleZh(item.key);
   const hasError = issues.some((issue) => issue.severity === 'error');
+  const localWarnings = getLocalWarnings(item, value);
+  const riskNotice = getRiskNotice(item, value);
   const [isSecretVisible, setIsSecretVisible] = useState(false);
   const [isPasswordEditable, setIsPasswordEditable] = useState(false);
   const [copyButtonText, setCopyButtonText] = useState('复制示例');
@@ -333,6 +410,13 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
         </p>
       ) : null}
 
+      {riskNotice ? (
+        <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+          <p className="text-xs font-medium text-amber-200">风险提示</p>
+          <p className="mt-1 text-xs leading-5 text-amber-100/90">{riskNotice}</p>
+        </div>
+      ) : null}
+
       {issues.length ? (
         <div className="mt-2 space-y-1">
           {issues.map((issue, index) => (
@@ -341,6 +425,16 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
               className={issue.severity === 'error' ? 'text-xs text-danger' : 'text-xs text-warning'}
             >
               {issue.message}
+            </p>
+          ))}
+        </div>
+      ) : null}
+
+      {localWarnings.length ? (
+        <div className="mt-2 space-y-1">
+          {localWarnings.map((warning) => (
+            <p key={warning} className="text-xs text-warning">
+              {warning}
             </p>
           ))}
         </div>
