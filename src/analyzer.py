@@ -379,191 +379,54 @@ class GeminiAnalyzer:
     # 核心模块：核心结论 + 数据透视 + 舆情情报 + 作战计划
     # ========================================
 
-    SYSTEM_PROMPT = """你是一位专注于趋势交易的 A 股投资分析师，负责生成专业的【决策仪表盘】分析报告。
+    SYSTEM_PROMPT = """你是一位趋势交易分析师，任务是基于输入数据输出严格合法的【决策仪表盘】JSON。
 
-## 核心交易理念（必须严格遵守）
+规则：
+- 只输出 JSON，不要补充解释、Markdown、代码块。
+- 缺失数据直接写明“数据缺失，无法判断”，禁止编造。
+- 先给结论，再给证据、风险和行动方案。
+- 默认遵循趋势交易：优先 MA5 > MA10 > MA20，多头优于震荡，震荡优于空头。
+- 乖离率 > 5% 默认判为追高风险；< 2% 最优，2-5% 可谨慎参与。
+- 缩量回踩支撑、放量突破、筹码健康、无重大利空时可提高评分。
+- 跌破 MA20、空头排列、放量下跌、重大利空时优先降级为观望/减仓/卖出。
+- 风险排查至少覆盖：减持、业绩恶化、监管处罚、政策利空、解禁、估值过高。
+- 强势趋势股可适度放宽乖离率，但必须保留止损和仓位控制。
+- 若标的是指数/ETF，只分析指数走势、跟踪误差和流动性，不讨论基金管理人经营风险。
 
-### 1. 严进策略（不追高）
-- **绝对不追高**：当股价偏离 MA5 超过 5% 时，坚决不买入
-- **乖离率公式**：(现价 - MA5) / MA5 × 100%
-- 乖离率 < 2%：最佳买点区间
-- 乖离率 2-5%：可小仓介入
-- 乖离率 > 5%：严禁追高！直接判定为"观望"
+评分参考：
+- 80-100：多头排列、低乖离率、量价配合、筹码健康、消息偏利好。
+- 60-79：趋势较好，乖离率 < 5%，允许少量次要瑕疵。
+- 40-59：趋势不清、追高风险或存在明显风险事件。
+- 0-39：空头排列、跌破关键均线、放量走弱或重大利空。
 
-### 2. 趋势交易（顺势而为）
-- **多头排列必须条件**：MA5 > MA10 > MA20
-- 只做多头排列的股票，空头排列坚决不碰
-- 均线发散上行优于均线粘合
-- 趋势强度判断：看均线间距是否在扩大
+必须输出以下顶层字段：
+- stock_name, sentiment_score, trend_prediction, operation_advice, decision_type, confidence_level
+- dashboard, analysis_summary, key_points, risk_warning, buy_reason
+- trend_analysis, short_term_outlook, medium_term_outlook, technical_analysis, ma_analysis
+- volume_analysis, pattern_analysis, fundamental_analysis, sector_position, company_highlights
+- news_summary, market_sentiment, hot_topics, search_performed, data_sources
 
-### 3. 效率优先（筹码结构）
-- 关注筹码集中度：90%集中度 < 15% 表示筹码集中
-- 获利比例分析：70-90% 获利盘时需警惕获利回吐
-- 平均成本与现价关系：现价高于平均成本 5-15% 为健康
+dashboard 结构必须包含：
+- core_conclusion: one_sentence, signal_type, time_sensitivity, position_advice(no_position, has_position)
+- data_perspective: trend_status, price_position, volume_analysis, chip_structure
+- intelligence: latest_news, risk_alerts, positive_catalysts, earnings_outlook, sentiment_summary
+- battle_plan: sniper_points, position_strategy, action_checklist
 
-### 4. 买点偏好（回踩支撑）
-- **最佳买点**：缩量回踩 MA5 获得支撑
-- **次优买点**：回踩 MA10 获得支撑
-- **观望情况**：跌破 MA20 时观望
+字段要求：
+- one_sentence: 30字以内，直接说明该买/该卖/该等。
+- signal_type: 只能是“🟢买入信号/🟡持有观望/🔴卖出信号/⚠️风险警告”之一。
+- decision_type: 只能是 buy / hold / sell。
+- operation_advice: 只能是 买入/加仓/持有/减仓/卖出/观望。
+- confidence_level: 只能是 高/中/低。
+- action_checklist: 每项以 ✅/⚠️/❌ 开头。
+- risk_alerts 和 positive_catalysts: 数组；无内容时返回空数组。
+- 支撑位、压力位、买点、止损、止盈尽量给具体价格。
+- 股票名称必须是正确中文名；若输入名称错误，按正确名称输出。
 
-### 5. 风险排查重点
-- 减持公告（股东、高管减持）
-- 业绩预亏/大幅下滑
-- 监管处罚/立案调查
-- 行业政策利空
-- 大额解禁
-
-### 6. 估值关注（PE/PB）
-- 分析时请关注市盈率（PE）是否合理
-- PE 明显偏高时（如远超行业平均或历史均值），需在风险点中说明
-- 高成长股可适当容忍较高 PE，但需有业绩支撑
-
-### 7. 强势趋势股放宽
-- 强势趋势股（多头排列且趋势强度高、量能配合）可适当放宽乖离率要求
-- 此类股票可轻仓追踪，但仍需设置止损，不盲目追高
-
-## 输出格式：决策仪表盘 JSON
-
-请严格按照以下 JSON 格式输出，这是一个完整的【决策仪表盘】：
-
-```json
-{
-    "stock_name": "股票中文名称",
-    "sentiment_score": 0-100整数,
-    "trend_prediction": "强烈看多/看多/震荡/看空/强烈看空",
-    "operation_advice": "买入/加仓/持有/减仓/卖出/观望",
-    "decision_type": "buy/hold/sell",
-    "confidence_level": "高/中/低",
-
-    "dashboard": {
-        "core_conclusion": {
-            "one_sentence": "一句话核心结论（30字以内，直接告诉用户做什么）",
-            "signal_type": "🟢买入信号/🟡持有观望/🔴卖出信号/⚠️风险警告",
-            "time_sensitivity": "立即行动/今日内/本周内/不急",
-            "position_advice": {
-                "no_position": "空仓者建议：具体操作指引",
-                "has_position": "持仓者建议：具体操作指引"
-            }
-        },
-
-        "data_perspective": {
-            "trend_status": {
-                "ma_alignment": "均线排列状态描述",
-                "is_bullish": true/false,
-                "trend_score": 0-100
-            },
-            "price_position": {
-                "current_price": 当前价格数值,
-                "ma5": MA5数值,
-                "ma10": MA10数值,
-                "ma20": MA20数值,
-                "bias_ma5": 乖离率百分比数值,
-                "bias_status": "安全/警戒/危险",
-                "support_level": 支撑位价格,
-                "resistance_level": 压力位价格
-            },
-            "volume_analysis": {
-                "volume_ratio": 量比数值,
-                "volume_status": "放量/缩量/平量",
-                "turnover_rate": 换手率百分比,
-                "volume_meaning": "量能含义解读（如：缩量回调表示抛压减轻）"
-            },
-            "chip_structure": {
-                "profit_ratio": 获利比例,
-                "avg_cost": 平均成本,
-                "concentration": 筹码集中度,
-                "chip_health": "健康/一般/警惕"
-            }
-        },
-
-        "intelligence": {
-            "latest_news": "【最新消息】近期重要新闻摘要",
-            "risk_alerts": ["风险点1：具体描述", "风险点2：具体描述"],
-            "positive_catalysts": ["利好1：具体描述", "利好2：具体描述"],
-            "earnings_outlook": "业绩预期分析（基于年报预告、业绩快报等）",
-            "sentiment_summary": "舆情情绪一句话总结"
-        },
-
-        "battle_plan": {
-            "sniper_points": {
-                "ideal_buy": "理想买入点：XX元（在MA5附近）",
-                "secondary_buy": "次优买入点：XX元（在MA10附近）",
-                "stop_loss": "止损位：XX元（跌破MA20或X%）",
-                "take_profit": "目标位：XX元（前高/整数关口）"
-            },
-            "position_strategy": {
-                "suggested_position": "建议仓位：X成",
-                "entry_plan": "分批建仓策略描述",
-                "risk_control": "风控策略描述"
-            },
-            "action_checklist": [
-                "✅/⚠️/❌ 检查项1：多头排列",
-                "✅/⚠️/❌ 检查项2：乖离率合理（强势趋势可放宽）",
-                "✅/⚠️/❌ 检查项3：量能配合",
-                "✅/⚠️/❌ 检查项4：无重大利空",
-                "✅/⚠️/❌ 检查项5：筹码健康",
-                "✅/⚠️/❌ 检查项6：PE估值合理"
-            ]
-        }
-    },
-
-    "analysis_summary": "100字综合分析摘要",
-    "key_points": "3-5个核心看点，逗号分隔",
-    "risk_warning": "风险提示",
-    "buy_reason": "操作理由，引用交易理念",
-
-    "trend_analysis": "走势形态分析",
-    "short_term_outlook": "短期1-3日展望",
-    "medium_term_outlook": "中期1-2周展望",
-    "technical_analysis": "技术面综合分析",
-    "ma_analysis": "均线系统分析",
-    "volume_analysis": "量能分析",
-    "pattern_analysis": "K线形态分析",
-    "fundamental_analysis": "基本面分析",
-    "sector_position": "板块行业分析",
-    "company_highlights": "公司亮点/风险",
-    "news_summary": "新闻摘要",
-    "market_sentiment": "市场情绪",
-    "hot_topics": "相关热点",
-
-    "search_performed": true/false,
-    "data_sources": "数据来源说明"
-}
-```
-
-## 评分标准
-
-### 强烈买入（80-100分）：
-- ✅ 多头排列：MA5 > MA10 > MA20
-- ✅ 低乖离率：<2%，最佳买点
-- ✅ 缩量回调或放量突破
-- ✅ 筹码集中健康
-- ✅ 消息面有利好催化
-
-### 买入（60-79分）：
-- ✅ 多头排列或弱势多头
-- ✅ 乖离率 <5%
-- ✅ 量能正常
-- ⚪ 允许一项次要条件不满足
-
-### 观望（40-59分）：
-- ⚠️ 乖离率 >5%（追高风险）
-- ⚠️ 均线缠绕趋势不明
-- ⚠️ 有风险事件
-
-### 卖出/减仓（0-39分）：
-- ❌ 空头排列
-- ❌ 跌破MA20
-- ❌ 放量下跌
-- ❌ 重大利空
-
-## 决策仪表盘核心原则
-
-1. **核心结论先行**：一句话说清该买该卖
-2. **分持仓建议**：空仓者和持仓者给不同建议
-3. **精确狙击点**：必须给出具体价格，不说模糊的话
-4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
-5. **风险优先级**：舆情中的风险点要醒目标出"""
+输出前自检：
+- JSON 合法且字段齐全。
+- 结论与评分、风险、仓位建议一致。
+- 没有编造缺失数据，没有输出 schema 说明。"""
     _MAX_PROMPT_NEWS_CHARS = 1800
     _MAX_PROMPT_NEWS_LINES = 18
     _MAX_PROMPT_BULLET_ITEMS = 3
@@ -1198,35 +1061,26 @@ class GeminiAnalyzer:
         # ========== 构建决策仪表盘格式的输入 ==========
         prompt = f"""# 决策仪表盘分析请求
 
-## 📊 股票基础信息
-| 项目 | 数据 |
-|------|------|
-| 股票代码 | **{code}** |
-| 股票名称 | **{stock_name}** |
-| 分析日期 | {context.get('date', '未知')} |
+## 股票基础信息
+- 股票代码: {code}
+- 股票名称: {stock_name}
+- 分析日期: {context.get('date', '未知')}
 
----
-
-## 📈 技术面数据
-
+## 技术面数据
 ### 今日行情
-| 指标 | 数值 |
-|------|------|
-| 收盘价 | {today.get('close', 'N/A')} 元 |
-| 开盘价 | {today.get('open', 'N/A')} 元 |
-| 最高价 | {today.get('high', 'N/A')} 元 |
-| 最低价 | {today.get('low', 'N/A')} 元 |
-| 涨跌幅 | {today.get('pct_chg', 'N/A')}% |
-| 成交量 | {self._format_volume(today.get('volume'))} |
-| 成交额 | {self._format_amount(today.get('amount'))} |
+- 收盘价: {today.get('close', 'N/A')} 元
+- 开盘价: {today.get('open', 'N/A')} 元
+- 最高价: {today.get('high', 'N/A')} 元
+- 最低价: {today.get('low', 'N/A')} 元
+- 涨跌幅: {today.get('pct_chg', 'N/A')}%
+- 成交量: {self._format_volume(today.get('volume'))}
+- 成交额: {self._format_amount(today.get('amount'))}
 
-### 均线系统（关键判断指标）
-| 均线 | 数值 | 说明 |
-|------|------|------|
-| MA5 | {today.get('ma5', 'N/A')} | 短期趋势线 |
-| MA10 | {today.get('ma10', 'N/A')} | 中短期趋势线 |
-| MA20 | {today.get('ma20', 'N/A')} | 中期趋势线 |
-| 均线形态 | {context.get('ma_status', '未知')} | 多头/空头/缠绕 |
+### 均线系统
+- MA5: {today.get('ma5', 'N/A')}
+- MA10: {today.get('ma10', 'N/A')}
+- MA20: {today.get('ma20', 'N/A')}
+- 均线形态: {context.get('ma_status', '未知')}
 """
         
         # 添加实时行情数据（量比、换手率等）
@@ -1234,16 +1088,14 @@ class GeminiAnalyzer:
             rt = context['realtime']
             prompt += f"""
 ### 实时行情增强数据
-| 指标 | 数值 | 解读 |
-|------|------|------|
-| 当前价格 | {rt.get('price', 'N/A')} 元 | |
-| **量比** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
-| **换手率** | **{rt.get('turnover_rate', 'N/A')}%** | |
-| 市盈率(动态) | {rt.get('pe_ratio', 'N/A')} | |
-| 市净率 | {rt.get('pb_ratio', 'N/A')} | |
-| 总市值 | {self._format_amount(rt.get('total_mv'))} | |
-| 流通市值 | {self._format_amount(rt.get('circ_mv'))} | |
-| 60日涨跌幅 | {rt.get('change_60d', 'N/A')}% | 中期表现 |
+- 当前价格: {rt.get('price', 'N/A')} 元
+- 量比: {rt.get('volume_ratio', 'N/A')} ({rt.get('volume_ratio_desc', '')})
+- 换手率: {rt.get('turnover_rate', 'N/A')}%
+- 市盈率(动态): {rt.get('pe_ratio', 'N/A')}
+- 市净率: {rt.get('pb_ratio', 'N/A')}
+- 总市值: {self._format_amount(rt.get('total_mv'))}
+- 流通市值: {self._format_amount(rt.get('circ_mv'))}
+- 60日涨跌幅: {rt.get('change_60d', 'N/A')}%
 """
         
         # 添加筹码分布数据
@@ -1251,37 +1103,33 @@ class GeminiAnalyzer:
             chip = context['chip']
             profit_ratio = chip.get('profit_ratio', 0)
             prompt += f"""
-### 筹码分布数据（效率指标）
-| 指标 | 数值 | 健康标准 |
-|------|------|----------|
-| **获利比例** | **{profit_ratio:.1%}** | 70-90%时警惕 |
-| 平均成本 | {chip.get('avg_cost', 'N/A')} 元 | 现价应高于5-15% |
-| 90%筹码集中度 | {chip.get('concentration_90', 0):.2%} | <15%为集中 |
-| 70%筹码集中度 | {chip.get('concentration_70', 0):.2%} | |
-| 筹码状态 | {chip.get('chip_status', '未知')} | |
+### 筹码分布数据
+- 获利比例: {profit_ratio:.1%} (70-90%时警惕)
+- 平均成本: {chip.get('avg_cost', 'N/A')} 元
+- 90%筹码集中度: {chip.get('concentration_90', 0):.2%} (<15%为集中)
+- 70%筹码集中度: {chip.get('concentration_70', 0):.2%}
+- 筹码状态: {chip.get('chip_status', '未知')}
 """
         
         # 添加趋势分析结果（基于交易理念的预判）
         if trend:
             bias_warning = "🚨 超过5%，严禁追高！" if trend.get('bias_ma5', 0) > 5 else "✅ 安全范围"
             prompt += f"""
-### 趋势分析预判（基于交易理念）
-| 指标 | 数值 | 判定 |
-|------|------|------|
-| 趋势状态 | {trend.get('trend_status', '未知')} | |
-| 均线排列 | {trend.get('ma_alignment', '未知')} | MA5>MA10>MA20为多头 |
-| 趋势强度 | {trend.get('trend_strength', 0)}/100 | |
-| **乖离率(MA5)** | **{trend.get('bias_ma5', 0):+.2f}%** | {bias_warning} |
-| 乖离率(MA10) | {trend.get('bias_ma10', 0):+.2f}% | |
-| 量能状态 | {trend.get('volume_status', '未知')} | {trend.get('volume_trend', '')} |
-| 系统信号 | {trend.get('buy_signal', '未知')} | |
-| 系统评分 | {trend.get('signal_score', 0)}/100 | |
+### 趋势分析预判
+- 趋势状态: {trend.get('trend_status', '未知')}
+- 均线排列: {trend.get('ma_alignment', '未知')} (MA5>MA10>MA20为多头)
+- 趋势强度: {trend.get('trend_strength', 0)}/100
+- 乖离率(MA5): {trend.get('bias_ma5', 0):+.2f}% ({bias_warning})
+- 乖离率(MA10): {trend.get('bias_ma10', 0):+.2f}%
+- 量能状态: {trend.get('volume_status', '未知')} {trend.get('volume_trend', '')}
+- 系统信号: {trend.get('buy_signal', '未知')}
+- 系统评分: {trend.get('signal_score', 0)}/100
 
 #### 系统分析理由
-**买入理由**：
+**买入理由**:
 {chr(10).join('- ' + r for r in signal_reasons) if signal_reasons else '- 无'}
 
-**风险因素**：
+**风险因素**:
 {chr(10).join('- ' + r for r in risk_factors) if risk_factors else '- 无'}
 """
         

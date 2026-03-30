@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch, call
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.agent.executor import AgentExecutor, AgentResult
+from src.agent.executor import AGENT_SYSTEM_PROMPT, CHAT_SYSTEM_PROMPT, AgentExecutor, AgentResult
 from src.agent.llm_adapter import LLMResponse, ToolCall
 from src.agent.tools.registry import ToolRegistry, ToolDefinition, ToolParameter
 
@@ -374,6 +374,25 @@ class TestAgentResult(unittest.TestCase):
         self.assertEqual(r.total_steps, 0)
         self.assertEqual(r.total_tokens, 0)
         self.assertIsNone(r.error)
+
+
+class TestPromptCompaction(unittest.TestCase):
+    """Guard prompt size and key output contracts."""
+
+    def test_agent_system_prompt_compact_but_complete(self):
+        prompt = AGENT_SYSTEM_PROMPT.format(skills_section='')
+        self.assertLess(len(prompt), 2600)
+        self.assertIn('dashboard.core_conclusion', prompt)
+        self.assertIn('decision_type', prompt)
+        self.assertIn('action_checklist', prompt)
+        self.assertIn('只用工具返回的数据，禁止编造', prompt)
+
+    def test_chat_system_prompt_compact_but_keeps_staged_flow(self):
+        prompt = CHAT_SYSTEM_PROMPT.format(skills_section='')
+        self.assertLess(len(prompt), 1000)
+        self.assertIn('Stage 1', prompt)
+        self.assertIn('Stage 4', prompt)
+        self.assertIn('不需要输出 JSON', prompt)
 
 
 if __name__ == '__main__':
