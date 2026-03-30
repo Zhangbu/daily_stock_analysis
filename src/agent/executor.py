@@ -320,38 +320,28 @@ class AgentExecutor:
     # ============================================================
 
     def _build_context_reuse_hint(self, context: Optional[Dict[str, Any]]) -> str:
-        """Build a hint string for pre-fetched context data.
-
-        This helps the LLM understand what data is already available
-        and avoid unnecessary tool calls.
-        """
+        """Build a compact hint for pre-fetched context data."""
         if not context:
             return ""
 
         available_data = []
-        
         if context.get("realtime_quote"):
-            available_data.append("实时行情（价格、涨跌幅、量比、换手率）")
+            available_data.append("实时行情")
         if context.get("chip_distribution"):
-            available_data.append("筹码分布（获利比例、集中度、平均成本）")
+            available_data.append("筹码分布")
         if context.get("daily_history"):
-            available_data.append("历史K线数据")
+            available_data.append("历史K线")
         if context.get("trend_analysis"):
-            available_data.append("技术指标分析（MA/MACD/RSI）")
+            available_data.append("趋势指标")
         if context.get("stock_info"):
-            available_data.append("股票基本信息")
+            available_data.append("股票信息")
         if context.get("news"):
-            available_data.append("最新新闻资讯")
+            available_data.append("新闻")
 
         if not available_data:
             return ""
 
-        hint = "\n\n⚠️ 【重要】以下数据已由系统预获取，请直接使用，无需再次调用对应工具：\n"
-        for i, data in enumerate(available_data, 1):
-            hint += f"  {i}. {data}\n"
-        hint += "\n请仅获取上述列表中未包含的数据。"
-
-        return hint
+        return "\n\n系统已预取：" + "、".join(available_data) + "。请优先复用，仅补充缺失数据。"
 
     # ============================================================
     # Synchronous execution
@@ -641,18 +631,56 @@ class AgentExecutor:
         parts = [task]
         if context:
             if context.get("stock_code"):
-                parts.append(f"\n股票代码: {context['stock_code']}")
+                parts.append(f"股票代码: {context['stock_code']}")
             if context.get("report_type"):
                 parts.append(f"报告类型: {context['report_type']}")
-            
-            # 注入已有的上下文数据，避免重复获取
-            if context.get("realtime_quote"):
-                parts.append(f"\n[系统已获取的实时行情]\n{json.dumps(context['realtime_quote'], ensure_ascii=False)}")
-            if context.get("chip_distribution"):
-                parts.append(f"\n[系统已获取的筹码分布]\n{json.dumps(context['chip_distribution'], ensure_ascii=False)}")
-                
-        parts.append("\n请使用可用工具获取缺失的数据（如历史K线、新闻等），然后以决策仪表盘 JSON 格式输出分析结果。")
+
+            realtime_summary = self._summarize_realtime_quote(context.get("realtime_quote"))
+            if realtime_summary:
+                parts.append(f"已知实时行情: {realtime_summary}")
+
+            chip_summary = self._summarize_chip_distribution(context.get("chip_distribution"))
+            if chip_summary:
+                parts.append(f"已知筹码摘要: {chip_summary}")
+
+        parts.append("请仅调用缺失工具，并输出决策仪表盘 JSON。")
         return "\n".join(parts)
+
+    def _summarize_realtime_quote(self, quote: Optional[Dict[str, Any]]) -> str:
+        """Summarize key realtime quote fields for the initial prompt."""
+        if not quote:
+            return ""
+
+        fields = []
+        for label, key, suffix in [
+            ("价格", "price", ""),
+            ("涨跌幅", "change_percent", "%"),
+            ("量比", "volume_ratio", ""),
+            ("换手率", "turnover_rate", "%"),
+        ]:
+            value = quote.get(key)
+            if value in (None, "", "N/A"):
+                continue
+            fields.append(f"{label}{value}{suffix}")
+        return "，".join(fields)
+
+    def _summarize_chip_distribution(self, chip: Optional[Dict[str, Any]]) -> str:
+        """Summarize key chip distribution fields for the initial prompt."""
+        if not chip:
+            return ""
+
+        fields = []
+        for label, key, suffix in [
+            ("获利比例", "profit_ratio", ""),
+            ("平均成本", "avg_cost", ""),
+            ("90%集中度", "concentration_90", ""),
+            ("筹码状态", "chip_status", ""),
+        ]:
+            value = chip.get(key)
+            if value in (None, "", "N/A"):
+                continue
+            fields.append(f"{label}{value}{suffix}")
+        return "，".join(fields)
 
     def _serialize_tool_result(self, result: Any) -> str:
         """Serialize a tool result to a JSON string for the LLM."""

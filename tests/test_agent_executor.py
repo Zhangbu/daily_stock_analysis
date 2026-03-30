@@ -357,6 +357,39 @@ class TestBuildUserMessage(unittest.TestCase):
         self.assertIn("股票代码: 600519", msg)
         self.assertIn("报告类型: daily", msg)
 
+    def test_message_with_prefetched_context_uses_compact_summaries(self):
+        msg = self.executor._build_user_message(
+            "Analyze",
+            context={
+                "realtime_quote": {
+                    "price": 123.45,
+                    "change_percent": 1.2,
+                    "volume_ratio": 0.98,
+                    "turnover_rate": 3.1,
+                    "extra": "ignored",
+                },
+                "chip_distribution": {
+                    "profit_ratio": 0.73,
+                    "avg_cost": 118.0,
+                    "concentration_90": 0.12,
+                    "chip_status": "集中",
+                    "raw": {"nested": True},
+                },
+            },
+        )
+        self.assertIn("已知实时行情: 价格123.45", msg)
+        self.assertIn("涨跌幅1.2%", msg)
+        self.assertIn("已知筹码摘要: 获利比例0.73", msg)
+        self.assertNotIn('"extra"', msg)
+        self.assertNotIn('"raw"', msg)
+
+    def test_context_hint_is_compact(self):
+        hint = self.executor._build_context_reuse_hint(
+            {"realtime_quote": {"price": 1}, "chip_distribution": {"profit_ratio": 0.5}, "news": ["x"]}
+        )
+        self.assertIn("系统已预取：实时行情、筹码分布、新闻", hint)
+        self.assertNotIn("无需再次调用对应工具", hint)
+
 
 # ============================================================
 # AgentResult dataclass
