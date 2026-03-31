@@ -279,7 +279,7 @@ python main.py
 
 **可选密码保护**：在 `.env` 中设置 `ADMIN_AUTH_ENABLED=true` 可启用 Web 登录，首次访问在网页设置初始密码，保护 Settings 中的 API 密钥等敏感配置。详见 [完整指南](docs/full-guide.md)。
 
-**设置页引导增强**：在 **设置 → 数据源 / 通知渠道** 中，页面会根据当前分类展示配置提示，并为常见字段提供示例值，方便快速填写 `REALTIME_SOURCE_PRIORITY`、`MARKET_SYNC_MARKETS`、`TELEGRAM_CA_BUNDLE` 等关键配置。像 `STOCK_LIST`、`HK_STOCK_LIST`、`US_STOCK_LIST`、`AGENT_SKILLS` 这类多值字段，也支持逐项增删编辑，并会对明显异常的代码/策略标识给出即时格式提示。多维情报摘要也已做压缩，默认每个维度只保留更关键的前 2 条结果；analyzer 与 agent 的系统提示词、行情区块，以及 Agent 首条 user message 中的预取数据上下文也同步收敛为更紧凑的摘要结构，并增加了提示词体积回归测试，进一步减少大模型 token 开销。
+**设置页引导增强**：在 **设置 → 数据源 / 通知渠道** 中，页面会根据当前分类展示配置提示，并为常见字段提供示例值，方便快速填写 `REALTIME_SOURCE_PRIORITY`、`MARKET_SYNC_MARKETS`、`TELEGRAM_CA_BUNDLE` 等关键配置。像 `STOCK_LIST`、`HK_STOCK_LIST`、`US_STOCK_LIST`、`AGENT_SKILLS` 这类多值字段，也支持逐项增删编辑，并会对明显异常的代码/策略标识给出即时格式提示。多维情报摘要也已做压缩，默认每个维度只保留更关键的前 2 条结果；analyzer 与 agent 的系统提示词、行情区块，以及 Agent 首条 user message、历史分析上下文中的预取数据也同步收敛为更紧凑的摘要结构，聊天场景也只回传最近几轮 history 进入 prompt，并增加了提示词体积回归测试，进一步减少大模型 token 开销。
 
 ### 从图片添加股票
 

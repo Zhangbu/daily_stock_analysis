@@ -47,6 +47,8 @@ TOOL_RETRY_BASE_DELAY: float = 0.5
 # Maximum delay between retries (seconds)
 TOOL_RETRY_MAX_DELAY: float = 5.0
 
+# Limit the amount of chat context sent back to the model each turn.
+_MAX_CHAT_HISTORY_MESSAGES: int = 6
 
 # Tool name → short label used to build contextual thinking messages
 _THINKING_TOOL_LABELS: Dict[str, str] = {
@@ -343,6 +345,41 @@ class AgentExecutor:
 
         return "\n\n系统已预取：" + "、".join(available_data) + "。请优先复用，仅补充缺失数据。"
 
+    def _compact_context_value(self, value: Any, max_chars: int = 240) -> str:
+        """Serialize and clip verbose context values before they enter chat prompts."""
+        if value is None:
+            return ""
+        if isinstance(value, (dict, list)):
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        else:
+            text = str(value)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 3] + "..."
+
+    def _build_previous_analysis_context_message(self, context: Optional[Dict[str, Any]]) -> str:
+        """Build a compact previous-analysis context message for chat follow-ups."""
+        if not context:
+            return ""
+
+        parts = []
+        if context.get("stock_code"):
+            parts.append(f"股票代码: {context['stock_code']}")
+        if context.get("stock_name"):
+            parts.append(f"股票名称: {context['stock_name']}")
+        if context.get("previous_price"):
+            parts.append(f"上次价格: {context['previous_price']}")
+        if context.get("previous_change_pct") not in (None, ""):
+            parts.append(f"上次涨跌幅: {context['previous_change_pct']}%")
+        if context.get("previous_analysis_summary"):
+            parts.append("历史摘要: " + self._compact_context_value(context.get("previous_analysis_summary")))
+        if context.get("previous_strategy"):
+            parts.append("历史策略: " + self._compact_context_value(context.get("previous_strategy")))
+        if not parts:
+            return ""
+        return "[历史分析上下文]\n" + "\n".join(parts)
+
     # ============================================================
     # Synchronous execution
     # ============================================================
@@ -420,7 +457,7 @@ class AgentExecutor:
 
         # Get conversation history
         session = conversation_manager.get_or_create(session_id)
-        history = session.get_history()
+        history = session.get_history()[-_MAX_CHAT_HISTORY_MESSAGES:]
 
         # Initialize conversation
         messages: List[Dict[str, Any]] = [
@@ -863,7 +900,7 @@ class AgentExecutor:
 
         # Get conversation history
         session = conversation_manager.get_or_create(session_id)
-        history = session.get_history()
+        history = session.get_history()[-_MAX_CHAT_HISTORY_MESSAGES:]
 
         # Initialize conversation
         messages: List[Dict[str, Any]] = [

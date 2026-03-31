@@ -21,6 +21,8 @@
 - `GeminiAnalyzer` prompt 继续瘦身：输入给大模型的行情/趋势区块改为更紧凑的 bullet 结构，`SYSTEM_PROMPT` 也从 4544 字符压缩到 1767 字符，在不改变 JSON 输出协议的前提下进一步降低 token 消耗。
 - Agent 提示词同步瘦身：`AGENT_SYSTEM_PROMPT` 从 3980 字符压缩到 1775 字符，`CHAT_SYSTEM_PROMPT` 从 1329 字符压缩到 446 字符，并新增回归测试防止提示词体积回弹。
 - Agent 首条 user message 继续瘦身：预取的实时行情与筹码分布不再原样注入整段 JSON，而是改为关键字段摘要；上下文复用提示也改为短句形式，进一步减少每轮对话输入 token。
+- Agent 聊天 prompt 新增 history 窗口限制：多轮对话仅回传最近 6 条历史消息进入模型，减少长会话下的重复上下文开销。
+- Agent 历史分析上下文同步瘦身：`previous_analysis_summary` / `previous_strategy` 在聊天跟进场景下改为短摘要注入，不再原样拼接长 JSON。
 - OpenAI 兼容接口在出现 `'ascii' codec can't encode` 错误时，会同时清洗 `SYSTEM_PROMPT` 与用户 prompt 中的表格线字符（如 `│`）后重试，避免 5 次重试均失败。
 - OpenAI 重试日志增强：补充模型名、token 参数模式、异常类型与截断错误信息，便于快速定位兼容性问题。
 - Agent 模式下 OpenAI 调用新增 ASCII 编码异常兜底：清洗 `messages/tools` 并在必要时使用 ASCII-safe 转义 payload 重试一次。
