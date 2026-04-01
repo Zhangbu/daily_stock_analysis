@@ -231,8 +231,8 @@ class StockAnalysisPipeline:
                 # 获取股票名称（优先从实时行情获取真实名称）
                 stock_name = STOCK_NAME_MAP.get(code, '')
 
-                # Step 1 & 2: 并行获取实时行情与筹码分布（减少单股分析首段等待）
-                realtime_quote, chip_data = self._fetch_enhanced_market_data(code)
+                # Step 1 & 2: 并行获取所有增强数据
+                realtime_quote, chip_data, flow_data, dragon_tiger_data, sector_data = self._fetch_enhanced_market_data(code)
 
                 if realtime_quote:
                     if realtime_quote.name:
@@ -267,6 +267,9 @@ class StockAnalysisPipeline:
                         stock_name,
                         realtime_quote,
                         chip_data,
+                        flow_data,
+                        dragon_tiger_data,
+                        sector_data,
                     ),
                     run_standard=lambda: self._analyze_with_standard_engine(
                         code,
@@ -275,6 +278,9 @@ class StockAnalysisPipeline:
                         stock_name,
                         realtime_quote,
                         chip_data,
+                        flow_data,
+                        dragon_tiger_data,
+                        sector_data,
                     ),
                 )
                 timer.set_message(f"success={bool(result)}")
@@ -287,33 +293,45 @@ class StockAnalysisPipeline:
                 logger.exception(f"[{code}] 详细错误信息:")
                 return None
 
-    def _fetch_enhanced_market_data(self, code: str) -> Tuple[Any, Optional[ChipDistribution]]:
+    def _fetch_enhanced_market_data(self, code: str) -> Tuple[Any, Optional[ChipDistribution], Optional[Any], Optional[Any], Optional[Dict]]:
         """
-        Fetch realtime quote and chip distribution concurrently for one stock.
+        Fetch realtime quote, chip distribution, fund flow, dragon tiger, and sector rotation concurrently.
         """
         realtime_quote = None
         chip_data = None
+        flow_data = None
+        dragon_tiger_data = None
+        sector_data = None
         tasks = {}
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             if self.config.enable_realtime_quote:
                 tasks["realtime_quote"] = executor.submit(self.fetcher_manager.get_realtime_quote, code)
-            if self.config.enable_chip_distribution:
+            if getattr(self.config, 'enable_chip_distribution', True):
                 tasks["chip_distribution"] = executor.submit(self.fetcher_manager.get_chip_distribution, code)
+            if getattr(self.config, 'enable_fund_flow', True):
+                tasks["fund_flow"] = executor.submit(self.fetcher_manager.get_fund_flow, code)
+            if getattr(self.config, 'enable_dragon_tiger', True):
+                tasks["dragon_tiger"] = executor.submit(self.fetcher_manager.get_dragon_tiger, code)
+            if getattr(self.config, 'enable_sector_rotation', True):
+                tasks["sector_rotation"] = executor.submit(self.fetcher_manager.get_stock_sector_rotation, code)
 
             for task_name, future in tasks.items():
                 try:
                     value = future.result()
                     if task_name == "realtime_quote":
                         realtime_quote = value
-                    else:
+                    elif task_name == "chip_distribution":
                         chip_data = value
+                    elif task_name == "fund_flow":
+                        flow_data = value
+                    elif task_name == "dragon_tiger":
+                        dragon_tiger_data = value
+                    elif task_name == "sector_rotation":
+                        sector_data = value
                 except Exception as exc:
-                    if task_name == "realtime_quote":
-                        logger.warning(f"[{code}] 获取实时行情失败: {exc}")
-                    else:
-                        logger.warning(f"[{code}] 获取筹码分布失败: {exc}")
+                    logger.warning(f"[{code}] 获取 {task_name} 数据失败: {exc}")
 
-        return realtime_quote, chip_data
+        return realtime_quote, chip_data, flow_data, dragon_tiger_data, sector_data
 
     def _analyze_with_standard_engine(
         self,
@@ -323,6 +341,9 @@ class StockAnalysisPipeline:
         stock_name: str,
         realtime_quote: Any,
         chip_data: Optional[ChipDistribution],
+        flow_data: Optional[Any] = None,
+        dragon_tiger_data: Optional[Any] = None,
+        sector_data: Optional[Dict] = None,
     ) -> Optional[AnalysisResult]:
         """Run the standard analysis engine using local pipeline dependencies."""
         try:
@@ -349,13 +370,16 @@ class StockAnalysisPipeline:
                     'yesterday': {}
                 }
             
-            # Step 6: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称）
+            # Step 6: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称、资金流、龙虎榜、板块）
             enhanced_context = self._enhance_context(
                 context, 
                 realtime_quote, 
                 chip_data, 
                 trend_result,
-                stock_name  # 传入股票名称
+                stock_name,  # 传入股票名称
+                flow_data,
+                dragon_tiger_data,
+                sector_data
             )
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
@@ -388,6 +412,14 @@ class StockAnalysisPipeline:
                         realtime_quote=realtime_quote,
                         chip_data=chip_data
                     )
+                    if flow_data:
+                        # Append flow data generically to the saved snapshot
+                        context_snapshot['fund_flow'] = flow_data.to_dict()
+                    if dragon_tiger_data:
+                        context_snapshot['dragon_tiger'] = dragon_tiger_data.to_dict() if hasattr(dragon_tiger_data, 'to_dict') else dragon_tiger_data
+                    if sector_data:
+                        context_snapshot['sector_rotation'] = sector_data
+                        
                     self.persistence.save_analysis_history(
                         result=result,
                         query_id=query_id,
@@ -503,7 +535,10 @@ class StockAnalysisPipeline:
         realtime_quote,
         chip_data: Optional[ChipDistribution],
         trend_result: Optional[TrendAnalysisResult],
-        stock_name: str = ""
+        stock_name: str = "",
+        flow_data: Optional[Any] = None,
+        dragon_tiger_data: Optional[Any] = None,
+        sector_data: Optional[Dict] = None,
     ) -> Dict[str, Any]:
         """
         增强分析上下文
@@ -559,6 +594,11 @@ class StockAnalysisPipeline:
                 'concentration_70': chip_data.concentration_70,
                 'chip_status': chip_data.get_chip_status(current_price or 0),
             }
+            
+        # 添加资金流入流出
+        if flow_data:
+            enhanced['fund_flow'] = flow_data.to_dict()
+            enhanced['fund_flow']['status'] = flow_data.get_fund_flow_status()
         
         # 添加趋势分析结果
         if trend_result:
@@ -574,6 +614,11 @@ class StockAnalysisPipeline:
                 'signal_score': trend_result.signal_score,
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
+                # 高级技术指标 (Phase 1)
+                'macd_signal': getattr(trend_result, 'macd_signal', ''),
+                'rsi_signal': getattr(trend_result, 'rsi_signal', ''),
+                'boll_signal': getattr(trend_result, 'boll_signal', ''),
+                'kdj_signal': getattr(trend_result, 'kdj_signal', ''),
             }
 
         # Issue #234: Override today with realtime OHLC + trend MA for intraday analysis
@@ -644,6 +689,12 @@ class StockAnalysisPipeline:
             context.get('code', ''), enhanced.get('stock_name', stock_name)
         )
 
+        if dragon_tiger_data:
+            enhanced['dragon_tiger'] = dragon_tiger_data.to_dict() if hasattr(dragon_tiger_data, 'to_dict') else dragon_tiger_data
+        
+        if sector_data:
+            enhanced['sector_rotation'] = sector_data
+
         return enhanced
 
     def _analyze_with_agent(
@@ -653,7 +704,10 @@ class StockAnalysisPipeline:
         query_id: str,
         stock_name: str,
         realtime_quote: Any,
-        chip_data: Optional[ChipDistribution]
+        chip_data: Optional[ChipDistribution],
+        flow_data: Optional[Any] = None,
+        dragon_tiger_data: Optional[Any] = None,
+        sector_data: Optional[Dict] = None,
     ) -> Optional[AnalysisResult]:
         """
         使用 Agent 模式分析单只股票。
@@ -679,6 +733,12 @@ class StockAnalysisPipeline:
                 initial_context["realtime_quote"] = self._safe_to_dict(realtime_quote)
             if chip_data:
                 initial_context["chip_distribution"] = self._safe_to_dict(chip_data)
+            if flow_data:
+                initial_context["fund_flow"] = flow_data.to_dict()
+            if dragon_tiger_data:
+                initial_context["dragon_tiger"] = dragon_tiger_data.to_dict() if hasattr(dragon_tiger_data, 'to_dict') else dragon_tiger_data
+            if sector_data:
+                initial_context["sector_rotation"] = sector_data
 
             # 运行 Agent
             message = f"请分析股票 {code} ({stock_name})，并生成决策仪表盘报告。"
@@ -1106,7 +1166,28 @@ class StockAnalysisPipeline:
         
         logger.info(f"===== 开始分析 {len(stock_codes)} 只股票 =====")
         logger.info(f"股票列表: {', '.join(stock_codes)}")
-        logger.info(f"并发数: {self.max_workers}, 模式: {'仅获取数据' if dry_run else '完整分析'}")
+
+        # 优化点 2 扩展：从同步数据中智能选股
+        selected_codes = []
+        if getattr(self.config, 'market_sync_stock_selection_enabled', False):
+            try:
+                from src.services.smart_stock_selector import select_from_synced_data
+                strategy = getattr(self.config, 'market_sync_selection_strategy', 'best_performer')
+                count = getattr(self.config, 'market_sync_select_count', 10)
+                selected_codes = select_from_synced_data(
+                    strategy=strategy,
+                    count=count,
+                    exclude_codes=stock_codes,  # 排除已配置的的股票，避免重复
+                )
+                if selected_codes:
+                    logger.info(f"智能选股完成：策略={strategy}, 选中 {len(selected_codes)} 只股票")
+            except Exception as e:
+                logger.warning(f"智能选股失败：{e}")
+        
+        # 合并股票列表（去重）
+        if selected_codes:
+            stock_codes = list(set(stock_codes + selected_codes))
+            logger.info(f"合并后股票数量：{len(stock_codes)} (基础池：{len(stock_codes) - len(selected_codes)}, 智能选股：{len(selected_codes)})")
         
         # === 批量预取实时行情（优化：避免每只股票都触发全量拉取）===
         # 只有股票数量 >= 5 时才进行预取，少量股票直接逐个查询更高效
@@ -1129,8 +1210,24 @@ class StockAnalysisPipeline:
         results: List[AnalysisResult] = []
         
         # 使用线程池并发处理
-        # 注意：max_workers 设置较低（默认3）以避免触发反爬
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+
+        # 优化点 7：根据股票数量动态调整并发数
+        stock_count = len(stock_codes)
+        if stock_count >= 20:
+            # 大量股票：使用较高并发
+            dynamic_workers = min(10, stock_count)
+        elif stock_count >= 10:
+            # 中等数量：适中并发
+            dynamic_workers = min(7, stock_count)
+        else:
+            # 少量股票：保持配置默认值
+            dynamic_workers = self.max_workers
+
+        # 实际使用的并发数（不超过配置最大值）
+        actual_workers = min(dynamic_workers, self.max_workers)
+        logger.info(f"并发数：{actual_workers} (配置：{self.max_workers})")
+
+        with ThreadPoolExecutor(max_workers=actual_workers) as executor:
             # 提交任务
             future_to_code = {
                 executor.submit(

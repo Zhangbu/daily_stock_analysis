@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
@@ -18,6 +21,9 @@ from src.repositories.stock_repo import StockRepository
 from src.storage import DatabaseManager
 
 logger = logging.getLogger(__name__)
+
+# 断点续传文件路径
+SYNC_CHECKPOINT_FILE = Path(__file__).parent.parent.parent / "data" / "market_sync_checkpoint.json"
 
 
 @dataclass
@@ -132,16 +138,22 @@ class MarketDataSyncService:
                 if get_market_for_stock(code) in set(markets)
             }
             self._set_status(priority_candidates=len(priority_codes))
+
             for market in markets:
                 self._set_status(current_market=market, message=f"syncing {market} market")
-                codes = self._get_market_universe(market)
+                codes, latest_dates_map = self._get_market_universe(market)
                 self._set_status(total_candidates=self._status.total_candidates + len(codes))
+
+                # 跟踪已同步的股票，用于断点续传
+                synced_codes: List[str] = []
 
                 for code in codes:
                     self._set_status(current_code=code)
                     is_priority = code in priority_codes
                     try:
-                        saved = self._sync_single_code(code)
+                        # 传递已查询的最新日期，避免重复查询
+                        latest_date = latest_dates_map.get(code)
+                        saved = self._sync_single_code(code, cached_latest_date=latest_date)
                         if saved > 0:
                             self._increment_status(
                                 processed=1,
@@ -156,6 +168,11 @@ class MarketDataSyncService:
                                 priority_processed=1 if is_priority else 0,
                                 priority_completed=1 if is_priority else 0,
                             )
+
+                        # 保存断点（无论是否实际保存数据，都记录进度）
+                        synced_codes.append(code)
+                        self._save_checkpoint(market, code, synced_codes)
+
                     except Exception as exc:
                         logger.warning("Market data sync failed for %s: %s", code, exc)
                         self._increment_status(
@@ -167,6 +184,10 @@ class MarketDataSyncService:
                     sleep_seconds = float(self.config.market_sync_sleep_seconds)
                     if sleep_seconds > 0:
                         time.sleep(sleep_seconds)
+
+                # 完成一个市场的同步后清除断点
+                self._clear_checkpoint(market)
+                logger.info(f"Market {market} sync completed: {len(synced_codes)} stocks processed")
 
             self._set_status(
                 running=False,
@@ -184,11 +205,24 @@ class MarketDataSyncService:
                 message=f"sync failed: {exc}",
             )
 
-    def _sync_single_code(self, code: str) -> int:
-        """Sync one stock code with incremental fallback when history already exists."""
+    def _sync_single_code(self, code: str, cached_latest_date: Optional[date] = None) -> int:
+        """Sync one stock code with incremental fallback when history already exists.
+
+        Args:
+            code: Stock code to sync
+            cached_latest_date: Pre-fetched latest trade date (optional, to avoid duplicate DB queries)
+
+        Returns:
+            Number of rows saved
+        """
         from data_provider.base import DataFetcherManager
 
-        latest_trade_date = self.stock_repo.get_latest_trade_date(code)
+        # 使用缓存的最新日期，如果没有则查询数据库
+        if cached_latest_date is not None:
+            latest_trade_date = cached_latest_date
+        else:
+            latest_trade_date = self.stock_repo.get_latest_trade_date(code)
+
         today = date.today()
         manager = DataFetcherManager()
 
@@ -210,10 +244,14 @@ class MarketDataSyncService:
             return 0
         return self.db.save_daily_data(df, code=code, data_source=source)
 
-    def _get_market_universe(self, market: str) -> List[str]:
-        """Resolve prioritized stock universe for one market."""
+    def _get_market_universe(self, market: str) -> tuple[List[str], Dict[str, Optional[date]]]:
+        """Resolve prioritized stock universe for one market.
+
+        Returns:
+            tuple: (codes list, latest_dates map)
+        """
         if market == "cn":
-            codes = self._get_cn_universe()
+            codes = self._get_cn_universe_filtered()  # 使用筛选后的股票池
         elif market == "hk":
             codes = self._get_hk_universe()
         elif market == "us":
@@ -221,10 +259,26 @@ class MarketDataSyncService:
         else:
             codes = []
 
+        # 跳过已同步到最新的股票，同时返回最新日期映射
+        codes, latest_dates_map = self._filter_fresh_codes_with_map(codes)
+
+        # 断点续传：加载上次的进度
+        if market in (self._status.current_market or ''):
+            checkpoint = self._load_checkpoint(market)
+            if checkpoint and checkpoint.get('last_code'):
+                logger.info(f"断点续传：从 {checkpoint['last_code']} 继续，已同步 {checkpoint.get('synced_count', 0)} 只")
+                # 已同步过的股票从列表中移除
+                synced_codes = set(checkpoint.get('synced_codes', []))
+                codes = [c for c in codes if c not in synced_codes]
+                # 从映射中移除已同步的股票
+                for synced in synced_codes:
+                    latest_dates_map.pop(synced, None)
+                logger.info(f"断点续传：跳过已同步的 {len(synced_codes)} 只股票，剩余 {len(codes)} 只待同步")
+
         max_codes = int(self.config.market_sync_max_codes_per_run)
         if max_codes > 0:
             codes = codes[:max_codes]
-        return self._prioritize_by_freshness(codes)
+        return codes, latest_dates_map
 
     def _get_cn_universe(self) -> List[str]:
         """Build CN universe with watchlist-first ordering."""
@@ -329,3 +383,161 @@ class MarketDataSyncService:
             self._status.errors += errors
             self._status.priority_processed += priority_processed
             self._status.priority_completed += priority_completed
+
+    # =========================================
+    # 断点续传功能
+    # =========================================
+
+    def _load_checkpoint(self, market: str) -> Optional[Dict[str, Any]]:
+        """Load checkpoint for a specific market."""
+        if not SYNC_CHECKPOINT_FILE.exists():
+            return None
+
+        try:
+            with open(SYNC_CHECKPOINT_FILE, 'r', encoding='utf-8') as f:
+                checkpoints = json.load(f)
+
+            if market in checkpoints:
+                logger.info(f"Loaded checkpoint for {market}: last_code={checkpoints[market].get('last_code')}")
+                return checkpoints[market]
+        except Exception as e:
+            logger.warning(f"Failed to load checkpoint: {e}")
+
+        return None
+
+    def _save_checkpoint(self, market: str, code: str, synced_codes: List[str]) -> None:
+        """Save checkpoint for a specific market."""
+        try:
+            checkpoints = {}
+            if SYNC_CHECKPOINT_FILE.exists():
+                with open(SYNC_CHECKPOINT_FILE, 'r', encoding='utf-8') as f:
+                    checkpoints = json.load(f)
+
+            checkpoints[market] = {
+                'last_code': code,
+                'synced_count': len(synced_codes),
+                'synced_codes': synced_codes,
+                'updated_at': datetime.now().isoformat()
+            }
+
+            # Ensure parent directory exists
+            SYNC_CHECKPOINT_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(SYNC_CHECKPOINT_FILE, 'w', encoding='utf-8') as f:
+                json.dump(checkpoints, f, ensure_ascii=False, indent=2)
+
+            logger.debug(f"Saved checkpoint for {market}: {code} (total: {len(synced_codes)})")
+        except Exception as e:
+            logger.warning(f"Failed to save checkpoint: {e}")
+
+    def _clear_checkpoint(self, market: str) -> None:
+        """Clear checkpoint after sync completes."""
+        try:
+            if SYNC_CHECKPOINT_FILE.exists():
+                with open(SYNC_CHECKPOINT_FILE, 'r', encoding='utf-8') as f:
+                    checkpoints = json.load(f)
+
+                if market in checkpoints:
+                    del checkpoints[market]
+
+                    with open(SYNC_CHECKPOINT_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(checkpoints, f, ensure_ascii=False, indent=2)
+
+                    logger.info(f"Cleared checkpoint for {market}")
+        except Exception as e:
+            logger.warning(f"Failed to clear checkpoint: {e}")
+
+    # =========================================
+    # 股票筛选功能（集成 StockFilter）
+    # =========================================
+
+    def _get_cn_universe_filtered(self) -> List[str]:
+        """Build CN universe with filtering based on config criteria."""
+        watchlist = [code for code in self.config.stock_list if get_market_for_stock(code) == "cn"]
+
+        if not self.config.market_sync_a_share_full_enabled:
+            return watchlist
+
+        # 使用 StockFilter 进行筛选
+        from data_provider.base import DataFetcherManager
+        from screening.filter import StockFilter
+
+        try:
+            manager = DataFetcherManager()
+            stock_filter = StockFilter(manager)
+
+            # 从配置读取筛选参数
+            filtered_df = stock_filter.filter_stocks(
+                min_market_cap=self.config.market_sync_min_market_cap,
+                min_turnover=self.config.market_sync_min_turnover,
+                min_turnover_rate=self.config.market_sync_min_turnover_rate,
+                max_turnover_rate=self.config.market_sync_max_turnover_rate,
+                min_price=self.config.market_sync_min_price,
+                exclude_prefixes=self.config.market_sync_exclude_prefixes,
+                target_count=self.config.market_sync_target_count,
+            )
+
+            if filtered_df is not None and not filtered_df.empty and 'code' in filtered_df.columns:
+                discovered = [str(code).strip().upper() for code in filtered_df["code"].tolist() if str(code).strip()]
+                logger.info(f"Filtered CN universe: {len(discovered)} stocks (from config criteria)")
+                return self._prioritize_codes(watchlist, discovered)
+
+        except Exception as e:
+            logger.warning(f"Failed to filter CN stocks, falling back to full universe: {e}")
+
+        # Fallback to full universe if filtering fails
+        return self._get_cn_universe()
+
+    # =========================================
+    # 跳过已同步股票功能
+    # =========================================
+
+    def _filter_fresh_codes(self, codes: List[str]) -> List[str]:
+        """Filter out stocks already synced to the latest trading day."""
+        codes, _ = self._filter_fresh_codes_with_map(codes)
+        return codes
+
+    def _filter_fresh_codes_with_map(self, codes: List[str]) -> tuple[List[str], Dict[str, Optional[date]]]:
+        """Filter out fresh stocks and return latest dates map.
+
+        Returns:
+            tuple: (codes to sync, latest_dates map)
+        """
+        if not self.config.market_sync_skip_fresh:
+            # 未启用跳过，返回所有股票和空映射
+            codes = [c for c in codes if str(c).strip()]
+            return codes, {}
+
+        today = date.today()
+        codes_to_check = [c for c in codes if str(c).strip()]
+
+        if not codes_to_check:
+            return [], {}
+
+        # 批量获取最新交易日期
+        latest_dates = self.stock_repo.get_latest_trade_dates(codes_to_check)
+
+        fresh_count = 0
+        non_fresh_codes = []
+        result_map: Dict[str, Optional[date]] = {}
+
+        for code in codes_to_check:
+            latest = latest_dates.get(code)
+            result_map[code] = latest  # 保存映射供后续使用
+
+            if latest is None:
+                # 无历史数据，需要同步
+                non_fresh_codes.append(code)
+            elif latest >= today:
+                # 已同步到今天
+                fresh_count += 1
+            else:
+                # 有历史数据但不是最新，需要同步
+                non_fresh_codes.append(code)
+
+        if fresh_count > 0:
+            logger.info(f"Skip fresh data: {fresh_count} stocks already synced to latest day, {len(non_fresh_codes)} remaining")
+
+        # 按新鲜度排序（缺失数据的优先）
+        ordered = self._prioritize_by_freshness(non_fresh_codes)
+        return ordered, result_map

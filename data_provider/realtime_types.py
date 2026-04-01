@@ -263,6 +263,67 @@ class ChipDistribution:
         return "，".join(status_parts)
 
 
+@dataclass
+class FundFlow:
+    """
+    资金流入流出数据（主力资金净流入等）
+    
+    反映该股票今日的超大单/大单/中单/小单净流入额和占比
+    """
+    code: str
+    date: str = ""
+    source: str = "akshare"
+    
+    main_net_inflow: float = 0.0          # 主力净流入净额（元）
+    main_net_inflow_pct: float = 0.0      # 主力净流入净占比(%)
+    
+    super_large_inflow: float = 0.0       # 超大单净流入（元）
+    super_large_inflow_pct: float = 0.0    # 超大单净流入占比(%)
+    
+    large_inflow: float = 0.0             # 大单净流入（元）
+    large_inflow_pct: float = 0.0         # 大单净流入占比(%)
+    
+    medium_inflow: float = 0.0            # 中单净流入（元）
+    medium_inflow_pct: float = 0.0        # 中单净流入占比(%)
+    
+    small_inflow: float = 0.0             # 小单净流入（元）
+    small_inflow_pct: float = 0.0         # 小单净流入占比(%)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            'code': self.code,
+            'date': self.date,
+            'source': self.source,
+            'main_net_inflow': self.main_net_inflow,
+            'main_net_inflow_pct': self.main_net_inflow_pct,
+            'super_large_inflow': self.super_large_inflow,
+            'super_large_inflow_pct': self.super_large_inflow_pct,
+            'large_inflow': self.large_inflow,
+            'large_inflow_pct': self.large_inflow_pct,
+            'medium_inflow': self.medium_inflow,
+            'medium_inflow_pct': self.medium_inflow_pct,
+            'small_inflow': self.small_inflow,
+            'small_inflow_pct': self.small_inflow_pct,
+        }
+    
+    def get_fund_flow_status(self) -> str:
+        """
+        获取资金流向状态描述
+        """
+        status_parts = []
+        if self.main_net_inflow > 10000000:
+            status_parts.append(f"主力大幅净流入(>千万): {self.main_net_inflow / 10000:.1f}万")
+        elif self.main_net_inflow > 0:
+            status_parts.append(f"主力轻微净流入: {self.main_net_inflow / 10000:.1f}万")
+        elif self.main_net_inflow < -10000000:
+            status_parts.append(f"主力大幅净流出(>千万): {self.main_net_inflow / 10000:.1f}万")
+        else:
+            status_parts.append(f"主力轻微净流出: {self.main_net_inflow / 10000:.1f}万")
+            
+        return "，".join(status_parts)
+
+
 class CircuitBreaker:
     """
     熔断器 - 管理数据源的熔断/冷却状态
@@ -413,3 +474,58 @@ def get_realtime_circuit_breaker() -> CircuitBreaker:
 def get_chip_circuit_breaker() -> CircuitBreaker:
     """获取筹码接口熔断器"""
     return _chip_circuit_breaker
+
+
+# 资金流接口熔断器
+_fund_flow_circuit_breaker = CircuitBreaker(
+    failure_threshold=2,      # 连续失败2次熔断
+    cooldown_seconds=600.0,   # 冷却10分钟
+    half_open_max_calls=1
+)
+
+
+def get_fund_flow_circuit_breaker() -> CircuitBreaker:
+    """资金流向熔断器：30次失败惩罚5分钟"""
+    return CircuitBreaker(
+        failure_threshold=30,
+        recovery_time=300,
+        name="FundFlow"
+    )
+
+@dataclass
+class DragonTigerList:
+    """
+    龙虎榜数据
+    """
+    date: str                  # 上榜日期
+    reason: str                # 上榜原因
+    net_buy: float             # 龙虎榜净买额(万元)
+    buy_amount: float          # 龙虎榜买入总额(万元)
+    sell_amount: float         # 龙虎榜卖出总额(万元)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'date': self.date,
+            'reason': self.reason,
+            'net_buy': self.net_buy,
+            'buy_amount': self.buy_amount,
+            'sell_amount': self.sell_amount
+        }
+    
+    def get_status(self) -> str:
+        if self.net_buy > 5000:
+            return "大额净买入(>5k万)"
+        elif self.net_buy > 0:
+            return "净买入"
+        elif self.net_buy > -5000:
+            return "净卖出"
+        else:
+            return "大额净卖出(<-5k万)"
+
+def get_dragon_tiger_circuit_breaker() -> CircuitBreaker:
+    """龙虎榜熔断器"""
+    return CircuitBreaker(
+        failure_threshold=10,
+        recovery_time=300,
+        name="DragonTiger"
+    )

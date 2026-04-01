@@ -24,8 +24,8 @@ class HistoryItem(BaseModel):
     report_type: Optional[str] = Field(None, description="报告类型")
     sentiment_score: Optional[int] = Field(
         None, 
-        description="情绪评分 (0-100)",
-        ge=0,
+        description="情绪评分 (-100至100)",
+        ge=-100,
         le=100
     )
     operation_advice: Optional[str] = Field(None, description="操作建议")
@@ -118,8 +118,8 @@ class ReportSummary(BaseModel):
     trend_prediction: Optional[str] = Field(None, description="趋势预测")
     sentiment_score: Optional[int] = Field(
         None, 
-        description="情绪评分 (0-100)",
-        ge=0,
+        description="情绪评分 (-100至100)",
+        ge=-100,
         le=100
     )
     sentiment_label: Optional[str] = Field(None, description="情绪标签")

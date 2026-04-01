@@ -154,6 +154,30 @@ class BaseFetcher(ABC):
         """
         return None
 
+    def get_fund_flow(self, stock_code: str) -> Optional[Any]:
+        """
+        获取资金流入流出数据（子类按需实现）
+        
+        Args:
+            stock_code: 股票代码
+        """
+        return None
+
+    def get_dragon_tiger(self, stock_code: str) -> Optional[Any]:
+        """
+        获取龙虎榜数据（子类按需实现）
+        
+        Args:
+            stock_code: 股票代码
+        """
+        return None
+
+    def get_stock_sector_rotation(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        获取板块热点轮动表现
+        """
+        return None
+
     def get_daily_data(
         self,
         stock_code: str, 
@@ -748,6 +772,141 @@ class DataFetcherManager:
                 continue
 
         logger.warning(f"[筹码分布] {stock_code} 所有数据源均失败")
+        return None
+
+    def get_fund_flow(self, stock_code: str):
+        """
+        获取资金流入流出数据（带熔断和多数据源降级）
+
+        策略：
+        1. 检查配置开关
+        2. 检查熔断器状态
+        3. 依次尝试多个数据源：AkshareFetcher -> TushareFetcher -> EfinanceFetcher
+        4. 所有数据源失败则返回 None（降级兜底）
+
+        Args:
+            stock_code: 股票代码
+
+        Returns:
+            FundFlow 对象，失败则返回 None
+        """
+        # Normalize code (strip SH/SZ prefix etc.)
+        stock_code = canonical_stock_code(normalize_stock_code(stock_code))
+
+        from .realtime_types import get_fund_flow_circuit_breaker
+        from src.config import get_config
+
+        config = get_config()
+
+        # 如果资金流向功能被禁用，直接返回 None
+        if not getattr(config, 'enable_fund_flow', True):  # Default to True
+            logger.debug(f"[资金流向] 功能已禁用，跳过 {stock_code}")
+            return None
+
+        circuit_breaker = get_fund_flow_circuit_breaker()
+
+        # 定义资金流数据源优先级列表
+        flow_sources = [
+            ("AkshareFetcher", "akshare_fund"),
+            ("EfinanceFetcher", "efinance_fund"),
+            ("TushareFetcher", "tushare_fund"),
+        ]
+
+        for fetcher_name, source_key in flow_sources:
+            # 检查熔断器状态
+            if not circuit_breaker.is_available(source_key):
+                logger.debug(f"[熔断] {fetcher_name} 资金流接口处于熔断状态，尝试下一个")
+                continue
+
+            try:
+                for fetcher in self._fetchers:
+                    if fetcher.name == fetcher_name:
+                        if hasattr(fetcher, 'get_fund_flow'):
+                            flow = fetcher.get_fund_flow(stock_code)
+                            if flow is not None:
+                                circuit_breaker.record_success(source_key)
+                                logger.info(f"[资金流向] {stock_code} 成功获取 (来源: {fetcher_name})")
+                                return flow
+                        break
+            except Exception as e:
+                logger.warning(f"[资金流向] {fetcher_name} 获取 {stock_code} 失败: {e}")
+                circuit_breaker.record_failure(source_key, str(e))
+                continue
+
+        logger.warning(f"[资金流向] {stock_code} 所有数据源均失败")
+        return None
+
+    def get_dragon_tiger(self, stock_code: str):
+        """
+        获取龙虎榜数据（带熔断和多数据源降级）
+        """
+        stock_code = canonical_stock_code(normalize_stock_code(stock_code))
+
+        from .realtime_types import get_dragon_tiger_circuit_breaker
+        from src.config import get_config
+
+        config = get_config()
+
+        # 如果龙虎榜功能被禁用，直接返回 None
+        if not getattr(config, 'enable_dragon_tiger', True):
+            logger.debug(f"[龙虎榜] 功能已禁用，跳过 {stock_code}")
+            return None
+
+        circuit_breaker = get_dragon_tiger_circuit_breaker()
+
+        # 定义龙虎榜数据源优先级列表
+        dt_sources = [
+            ("AkshareFetcher", "akshare_dragon_tiger"),
+        ]
+
+        for fetcher_name, source_key in dt_sources:
+            if not circuit_breaker.is_available(source_key):
+                logger.debug(f"[熔断] {fetcher_name} 龙虎榜接口处于熔断状态，尝试下一个")
+                continue
+
+            try:
+                for fetcher in self._fetchers:
+                    if fetcher.name == fetcher_name:
+                        if hasattr(fetcher, 'get_dragon_tiger'):
+                            dt_data = fetcher.get_dragon_tiger(stock_code)
+                            # dt_data 可以为 None（未上榜不算异常失败）
+                            if dt_data is not None:
+                                circuit_breaker.record_success(source_key)
+                                logger.info(f"[龙虎榜] {stock_code} 成功获取 (来源: {fetcher_name})")
+                                return dt_data
+                            else:
+                                circuit_breaker.record_success(source_key)
+                                logger.debug(f"[龙虎榜] {stock_code} 未上榜 (查无数据)")
+                                return None
+                        break
+            except Exception as e:
+                logger.warning(f"[龙虎榜] {fetcher_name} 获取 {stock_code} 失败: {e}")
+                circuit_breaker.record_failure(source_key, str(e))
+                continue
+
+        return None
+
+    def get_stock_sector_rotation(self, stock_code: str):
+        """
+        获取板块轮动表现（跳过熔断，因为数据是每天变化慢且只有少量调用）
+        """
+        stock_code = canonical_stock_code(normalize_stock_code(stock_code))
+        from src.config import get_config
+        
+        config = get_config()
+        if not getattr(config, 'enable_sector_rotation', True):
+            return None
+            
+        try:
+            for fetcher in self._fetchers:
+                if fetcher.name == "AkshareFetcher" and hasattr(fetcher, 'get_stock_sector_rotation'):
+                    res = fetcher.get_stock_sector_rotation(stock_code)
+                    if res is not None:
+                        logger.info(f"[板块轮动] {stock_code} 所属行业 {res.get('industry')} (涨跌幅: {res.get('change_pct')}%)")
+                    return res
+        except Exception as e:
+            logger.warning(f"[板块轮动] 获取 {stock_code} 板块表现失败: {e}")
+            
         return None
 
     def get_stock_name(self, stock_code: str) -> Optional[str]:

@@ -31,6 +31,7 @@ from src.llm.retry_policy import (
     safe_exception_text as _safe_exception_text,
 )
 from src.llm.result_parser import fix_json_string, parse_response, parse_text_response
+from src.llm.response_cache import get_llm_cache, LLMResponseCache
 
 logger = logging.getLogger(__name__)
 
@@ -427,8 +428,8 @@ dashboard 结构必须包含：
 - JSON 合法且字段齐全。
 - 结论与评分、风险、仓位建议一致。
 - 没有编造缺失数据，没有输出 schema 说明。"""
-    _MAX_PROMPT_NEWS_CHARS = 1800
-    _MAX_PROMPT_NEWS_LINES = 18
+    _MAX_PROMPT_NEWS_CHARS = 1000  # 从 1800 降至 1000，减少 token 使用
+    _MAX_PROMPT_NEWS_LINES = 12    # 从 18 降至 12
     _MAX_PROMPT_BULLET_ITEMS = 3
     _MAX_PROMPT_ITEM_CHARS = 90
 
@@ -982,20 +983,35 @@ dashboard 结构必须包含：
                 "max_output_tokens": 8192,
             }
 
-            # 记录实际使用的 API 提供方
-            api_provider = (
-                "OpenAI" if self._use_openai
-                else "Anthropic" if self._use_anthropic
-                else "Gemini"
-            )
-            logger.info(f"[LLM调用] 开始调用 {api_provider} API...")
-            
-            # 使用带重试的 API 调用
-            start_time = time.time()
-            response_text = self._call_api_with_retry(prompt, generation_config)
-            elapsed = time.time() - start_time
+            # 检查缓存（避免重复分析相同股票 + 相同日期）
+            cache: LLMResponseCache = get_llm_cache()
+            cached_response = cache.get(code, prompt, model_name)
 
-            # 记录响应信息
+            if cached_response:
+                logger.info(f"[{code}] 命中 LLM 缓存，跳过 API 调用")
+                response_text = cached_response
+                api_provider = "Cache"
+                elapsed = 0.0
+            else:
+                # 记录实际使用的 API 提供方
+                api_provider = (
+                    "OpenAI" if self._use_openai
+                    else "Anthropic" if self._use_anthropic
+                    else "Gemini"
+                )
+                logger.info(f"[LLM 调用] 开始调用 {api_provider} API...")
+
+                # 使用带重试的 API 调用
+                start_time = time.time()
+                response_text = self._call_api_with_retry(prompt, generation_config)
+                elapsed = time.time() - start_time
+
+                # 记录响应信息
+                logger.info(f"[LLM 返回] {api_provider} API 响应成功，耗时 {elapsed:.2f}s, 响应长度 {len(response_text)} 字符")
+
+                # 缓存响应
+                cache.set(code, prompt, model_name, response_text)
+                logger.debug(f"[{code}] 已缓存 LLM 响应")
             logger.info(f"[LLM返回] {api_provider} API 响应成功, 耗时 {elapsed:.2f}s, 响应长度 {len(response_text)} 字符")
             
             # 记录响应预览（INFO级别）和完整响应（DEBUG级别）
@@ -1111,6 +1127,40 @@ dashboard 结构必须包含：
 - 筹码状态: {chip.get('chip_status', '未知')}
 """
         
+        # 添加资金流向数据
+        if 'fund_flow' in context:
+            ff = context['fund_flow']
+            prompt += f"""
+### 资金流向与主力意图
+- 当日资金状态: {ff.get('status', '未知')}
+- 主力总净流入: {self._format_amount(ff.get('main_net_inflow', 0))} (占比: {self._format_percent(ff.get('main_net_inflow_ratio', 0)*100)})
+- 超大单净额: {self._format_amount(ff.get('super_large_inflow', 0))}
+- 大单净额: {self._format_amount(ff.get('large_inflow', 0))}
+"""
+        
+        # 添加龙虎榜数据
+        if 'dragon_tiger' in context and context['dragon_tiger'] is not None:
+            dt = context['dragon_tiger']
+            prompt += f"""
+### 近期游资与龙虎榜热度
+- 上榜日期: {dt.get('date', '未知')}
+- 上榜原因: {dt.get('reason', '未知')}
+- 净买入额: {dt.get('net_buy', 0) / 10000:.1f} 万
+- 龙虎榜总买入: {dt.get('buy_amount', 0) / 10000:.1f} 万
+- 龙虎榜总卖出: {dt.get('sell_amount', 0) / 10000:.1f} 万
+"""
+
+        # 添加板块轮动数据
+        if 'sector_rotation' in context and context['sector_rotation'] is not None:
+            sr = context['sector_rotation']
+            prompt += f"""
+### 所属板块综合表现
+- 板块名称: {sr.get('industry', '未知')}
+- 当日板块涨跌幅: {sr.get('change_pct', 0.0):+.2f}%
+- 板块领涨股票: {sr.get('leader', '未知')}
+- 板块涨平跌排名: {sr.get('rank', '未知')} / {sr.get('total_ranks', '未知')}
+"""
+        
         # 添加趋势分析结果（基于交易理念的预判）
         if trend:
             bias_warning = "🚨 超过5%，严禁追高！" if trend.get('bias_ma5', 0) > 5 else "✅ 安全范围"
@@ -1122,6 +1172,10 @@ dashboard 结构必须包含：
 - 乖离率(MA5): {trend.get('bias_ma5', 0):+.2f}% ({bias_warning})
 - 乖离率(MA10): {trend.get('bias_ma10', 0):+.2f}%
 - 量能状态: {trend.get('volume_status', '未知')} {trend.get('volume_trend', '')}
+- MACD 指标: {trend.get('macd_signal', '未知')}
+- RSI 指标: {trend.get('rsi_signal', '未知')}
+- BOLL 形态: {trend.get('boll_signal', '未知')}
+- KDJ 指标: {trend.get('kdj_signal', '未知')}
 - 系统信号: {trend.get('buy_signal', '未知')}
 - 系统评分: {trend.get('signal_score', 0)}/100
 
@@ -1226,25 +1280,53 @@ dashboard 结构必须包含：
         return compact_items
 
     def _compact_news_context(self, news_context: Optional[str]) -> Optional[str]:
-        """Trim verbose intel blocks to reduce prompt token usage."""
+        """增强版：只保留关键信息（利空/利好/业绩），减少 prompt token 使用"""
         if not news_context:
             return news_context
 
-        compact_lines: List[str] = []
-        for raw_line in str(news_context).splitlines():
-            line = raw_line.rstrip()
-            if not line.strip():
-                continue
-            stripped = line.strip()
-            if stripped.startswith(tuple(str(i) for i in range(1, 10))):
-                compact_lines.append(_clip_text(line, 100))
-            elif line.startswith('     '):
-                compact_lines.append(_clip_text(line, 110))
-            else:
-                compact_lines.append(_clip_text(line, 80))
+        # 1. 先提取关键句子（包含关键词）- 优先保留
+        key_phrases = [
+            '减持', '处罚', '利空', '调查', '监管', '立案', '警示',  # 风险类
+            '业绩', '预增', '预盈', '扭亏', '快报', '分红', '高送转',  # 业绩类
+            '合同', '中标', '订单', '合作', '签约', '大单',  # 利好类
+            '政策', '补贴', '扶持', '准入', '牌照',  # 政策类
+            '重组', '并购', '回购', '增持', '举牌'  # 资本运作类
+        ]
 
-            if len(compact_lines) >= self._MAX_PROMPT_NEWS_LINES:
-                break
+        important_lines = []
+        other_lines = []
+
+        for line in str(news_context).splitlines():
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+
+            # 检查是否包含关键词
+            if any(phrase in line_stripped for phrase in key_phrases):
+                important_lines.append(line_stripped)
+            else:
+                other_lines.append(line_stripped)
+
+        # 2. 优先保留重要信息（最多 8 条）
+        compact_lines = []
+        for line in important_lines[:8]:
+            compact_lines.append(_clip_text(line, 80))
+
+        # 3. 补充其他信息（填充剩余配额）
+        remaining = self._MAX_PROMPT_NEWS_LINES - len(compact_lines)
+        for line in other_lines[:remaining]:
+            compact_lines.append(_clip_text(line, 80))
+
+        if not compact_lines:
+            # 如果没有关键信息，返回原始压缩结果
+            compact_lines = []
+            for raw_line in str(news_context).splitlines():
+                line = raw_line.rstrip()
+                if not line.strip():
+                    continue
+                compact_lines.append(_clip_text(line.strip(), 80))
+                if len(compact_lines) >= self._MAX_PROMPT_NEWS_LINES:
+                    break
 
         compact_text = '\n'.join(compact_lines)
         return _clip_text(compact_text, self._MAX_PROMPT_NEWS_CHARS)

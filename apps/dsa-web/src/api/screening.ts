@@ -1,7 +1,7 @@
 import apiClient from './index';
 
 export interface StockScreeningRequest {
-  market?: 'cn' | 'us';
+  market?: 'cn' | 'us' | 'hk';
   data_mode?: 'database' | 'realtime';
   min_market_cap?: number;
   max_market_cap?: number;

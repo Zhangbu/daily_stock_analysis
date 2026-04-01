@@ -338,7 +338,7 @@ const ScreeningPage: React.FC = () => {
     setActionMessage(null);
     try {
       const config = await systemConfigApi.getConfig(true);
-      const targetKey = market === 'us' ? 'US_STOCK_LIST' : market === 'hk' ? 'HK_STOCK_LIST' : 'STOCK_LIST';
+      const targetKey = filters.market === 'us' ? 'US_STOCK_LIST' : filters.market === 'hk' ? 'HK_STOCK_LIST' : 'STOCK_LIST';
       const stockListItem = config.items.find((item) => item.key === targetKey);
       const existing = (stockListItem?.value || '')
         .split(',')
@@ -357,7 +357,7 @@ const ScreeningPage: React.FC = () => {
         reloadNow: true,
         items: [{ key: targetKey, value: nextValue }],
       });
-      setActionMessage(`${code} 已加入${market === 'us' ? '美股' : market === 'hk' ? '港股' : 'A股'}股票池`);
+      setActionMessage(`${code} 已加入${filters.market === 'us' ? '美股' : filters.market === 'hk' ? '港股' : 'A股'}股票池`);
       await loadSyncStatus();
     } catch (err) {
       if (err instanceof SystemConfigConflictError) {

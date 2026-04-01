@@ -212,3 +212,46 @@ class StockRepository:
         for code, latest_date in rows:
             result[str(code).upper()] = latest_date
         return result
+
+    def get_range_for_all(
+        self,
+        start_date: date,
+        end_date: date,
+        limit_per_stock: int = 1
+    ) -> List[StockDaily]:
+        """
+        Get daily data for all stocks in date range.
+
+        Args:
+            start_date: Start date
+            end_date: End date
+            limit_per_stock: Max records per stock (1 = latest only)
+
+        Returns:
+            List of StockDaily records
+        """
+        with self.db.get_session() as session:
+            query = (
+                select(StockDaily)
+                .where(
+                    and_(
+                        StockDaily.date >= start_date,
+                        StockDaily.date <= end_date,
+                    )
+                )
+                .order_by(desc(StockDaily.date))
+            )
+            # SQLite doesn't support window functions well, so we fetch all and limit in Python
+            all_rows = session.execute(query).scalars().all()
+
+            # Group by code and take first N per stock
+            from collections import defaultdict
+            grouped: Dict[str, List[StockDaily]] = defaultdict(list)
+            for row in all_rows:
+                grouped[row.code].append(row)
+
+            result: List[StockDaily] = []
+            for code, rows in grouped.items():
+                result.extend(rows[:limit_per_stock])
+
+            return result

@@ -1315,6 +1315,174 @@ class AkshareFetcher(BaseFetcher):
             logger.error(f"[API错误] 获取 {stock_code} 筹码分布失败: {e}")
             return None
     
+    def get_fund_flow(self, stock_code: str) -> Optional[Any]:
+        """
+        获取个股资金流入流出数据（主力资金净流入等）
+        
+        数据来源：ak.stock_individual_fund_flow()
+        
+        Args:
+            stock_code: 股票代码
+            
+        Returns:
+            FundFlow 对象，失败返回 None
+        """
+        import akshare as ak
+        from .realtime_types import FundFlow
+        
+        # 美股/指数没有A股特色的资金流入流出
+        if _is_us_code(stock_code) or _is_etf_code(stock_code):
+            return None
+
+        # 尝试通过 akshare 获取个股资金流向（东方财富数据源）
+        # 代码需判断市场后缀
+        if stock_code.startswith(('6', '5')):
+            market = "sh"
+        elif stock_code.startswith(('4', '8', '9')):
+            market = "bj"
+        else:
+            market = "sz"
+            
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+            
+            logger.info(f"[API调用] ak.stock_individual_fund_flow({stock_code}) 获取资金流入流出...")
+            df = ak.stock_individual_fund_flow(stock=stock_code, market=market)
+            
+            if df is None or df.empty:
+                logger.warning(f"[API返回] 未找到 {stock_code} 的资金流入流出数据")
+                return None
+                
+            # 拿到最新交易日的数据
+            latest = df.iloc[-1]
+            
+            flow = FundFlow(
+                code=stock_code,
+                date=str(latest.get('日期', '')),
+                source="akshare_fund",
+                main_net_inflow=safe_float(latest.get('主力净流入-净额'), 0.0),
+                main_net_inflow_pct=safe_float(latest.get('主力净流入-净占比'), 0.0),
+                super_large_inflow=safe_float(latest.get('超大单净流入-净额'), 0.0),
+                super_large_inflow_pct=safe_float(latest.get('超大单净流入-净占比'), 0.0),
+                large_inflow=safe_float(latest.get('大单净流入-净额'), 0.0),
+                large_inflow_pct=safe_float(latest.get('大单净流入-净占比'), 0.0),
+                medium_inflow=safe_float(latest.get('中单净流入-净额'), 0.0),
+                medium_inflow_pct=safe_float(latest.get('中单净流入-净占比'), 0.0),
+                small_inflow=safe_float(latest.get('小单净流入-净额'), 0.0),
+                small_inflow_pct=safe_float(latest.get('小单净流入-净占比'), 0.0)
+            )
+            
+            logger.info(f"[资金流向] {stock_code} 日期={flow.date}: 主力净流入={flow.main_net_inflow / 10000:.1f}万, "
+                       f"超大单净额={flow.super_large_inflow / 10000:.1f}万, 大单净额={flow.large_inflow / 10000:.1f}万")
+            return flow
+            
+        except Exception as e:
+            logger.error(f"[API错误] 获取 {stock_code} 资金流数据失败: {e}")
+            return None
+
+    def get_dragon_tiger(self, stock_code: str) -> Optional[Any]:
+        """
+        获取个股近期龙虎榜上榜情况
+        """
+        import akshare as ak
+        from datetime import datetime, timedelta
+        from .realtime_types import DragonTigerList
+        from src.utils.helpers import safe_float
+        
+        if _is_us_code(stock_code) or _is_etf_code(stock_code):
+            return None
+            
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+            
+            # 取最近5天以覆盖周末
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=5)
+            
+            start_str = start_date.strftime("%Y%m%d")
+            end_str = end_date.strftime("%Y%m%d")
+            
+            logger.info(f"[API调用] ak.stock_lhb_detail_em({start_str}-{end_str}) 检查龙虎榜...")
+            df = ak.stock_lhb_detail_em(start_date=start_str, end_date=end_str)
+            
+            if df is None or df.empty:
+                return None
+                
+            filtered = df[df['代码'] == stock_code]
+            if filtered.empty:
+                return None
+                
+            filtered = filtered.sort_values(by='上榜日', ascending=False)
+            latest = filtered.iloc[0]
+            
+            dt_data = DragonTigerList(
+                date=str(latest.get('上榜日', '')),
+                reason=str(latest.get('上榜原因', '')),
+                net_buy=safe_float(latest.get('龙虎榜净买额', 0)),
+                buy_amount=safe_float(latest.get('龙虎榜买入额', 0)),
+                sell_amount=safe_float(latest.get('龙虎榜卖出额', 0))
+            )
+            
+            logger.info(f"[龙虎榜] {stock_code} 于 {dt_data.date} 上榜: {dt_data.reason}, 净买额={dt_data.net_buy/10000:.1f}万")
+            return dt_data
+            
+        except Exception as e:
+            logger.error(f"[API错误] 获取 {stock_code} 龙虎榜数据失败: {e}")
+            return None
+
+    def get_stock_sector_rotation(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        获取个股所属板块及该板块当日表现
+        """
+        import akshare as ak
+        
+        if _is_us_code(stock_code) or _is_etf_code(stock_code):
+            return None
+            
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+            
+            # 1. 获取个股所属行业
+            info_df = ak.stock_individual_info_em(symbol=stock_code)
+            if info_df is None or info_df.empty:
+                return None
+            
+            industry_row = info_df[info_df['item'] == '行业']
+            if industry_row.empty:
+                return None
+            industry_name = str(industry_row.iloc[0]['value'])
+            
+            # 2. 获取当天所有板块涨跌（注意：此接口请求较大，有缓存最好，此处依赖请求限流保障）
+            board_df = ak.stock_board_industry_name_em()
+            if board_df is None or board_df.empty:
+                return {'industry': industry_name}
+                
+            # 3. 在所有板块里找到它
+            # akshare 板块名称匹配可能有出入，比如 "银行" vs "银行Ⅱ"
+            import re
+            clean_industry = re.sub(r'[^a-zA-Z\u4e00-\u9fa5]', '', industry_name)
+            
+            target_row = board_df[board_df['板块名称'].str.contains(clean_industry, na=False)]
+            if target_row.empty:
+                return {'industry': industry_name}
+                
+            match = target_row.iloc[0]
+            
+            return {
+                'industry': industry_name,
+                'change_pct': float(match.get('涨跌幅', 0.0)),
+                'amount': float(match.get('总成交额', 0.0)),
+                'rank': target_row.index[0] + 1,
+                'total_ranks': len(board_df),
+                'leader': str(match.get('领涨股票', ''))
+            }
+        except Exception as e:
+            logger.error(f"[API错误] 获取 {stock_code} 板块表现失败: {e}")
+            return None
+    
     def get_enhanced_data(self, stock_code: str, days: int = 60) -> Dict[str, Any]:
         """
         获取增强数据（历史K线 + 实时行情 + 筹码分布）
@@ -1331,6 +1499,7 @@ class AkshareFetcher(BaseFetcher):
             'daily_data': None,
             'realtime_quote': None,
             'chip_distribution': None,
+            'fund_flow': None,
         }
         
         # 获取日线数据
@@ -1346,6 +1515,12 @@ class AkshareFetcher(BaseFetcher):
         # 获取筹码分布
         result['chip_distribution'] = self.get_chip_distribution(stock_code)
         
+        # 获取资金流入流出
+        try:
+            result['fund_flow'] = self.get_fund_flow(stock_code)
+        except Exception as e:
+            logger.error(f"获取 {stock_code} 资金流向失败: {e}")
+            
         return result
 
     def get_main_indices(self, region: str = "cn") -> Optional[List[Dict[str, Any]]]:

@@ -68,9 +68,14 @@ class Config:
     gemini_temperature: float = 0.7  # 温度参数（0.0-2.0，控制输出随机性，默认0.7）
 
     # Gemini API 请求配置（防止 429 限流）
-    gemini_request_delay: float = 2.0  # 请求间隔（秒）
+    gemini_request_delay: float = 1.0  # 请求间隔（秒）（优化点 7：从 2.0 降至 1.0）
     gemini_max_retries: int = 5  # 最大重试次数
     gemini_retry_delay: float = 5.0  # 重试基础延时（秒）
+
+    # LLM 响应缓存配置（优化点 6：减少重复调用）
+    llm_cache_enabled: bool = True  # 启用 LLM 响应缓存
+    llm_cache_ttl_hours: int = 24  # 缓存有效期（小时）
+    llm_cache_max_size: int = 1000  # 最大缓存条目数
 
     # Anthropic Claude API（备选，当 Gemini 不可用时使用）
     anthropic_api_key: Optional[str] = None
@@ -202,7 +207,7 @@ class Config:
     log_level: str = "INFO"  # 日志级别
     
     # === 系统配置 ===
-    max_workers: int = 3  # 低并发防封禁
+    max_workers: int = 5  # 最大并发线程数（优化点 7：从 3 提升至 5）
     debug: bool = False
     http_proxy: Optional[str] = None  # HTTP 代理 (例如: http://127.0.0.1:10809)
     https_proxy: Optional[str] = None # HTTPS 代理
@@ -237,6 +242,9 @@ class Config:
     enable_realtime_technical_indicators: bool = True
     # 筹码分布开关（该接口不稳定，云端部署建议关闭）
     enable_chip_distribution: bool = True
+    enable_fund_flow: bool = True
+    enable_dragon_tiger: bool = True
+    enable_sector_rotation: bool = True
     # 东财接口补丁开关
     enable_eastmoney_patch: bool = False
     # 实时行情数据源优先级（逗号分隔）
@@ -258,6 +266,23 @@ class Config:
     market_sync_incremental_days: int = 5
     market_sync_sleep_seconds: float = 2.0
     market_sync_max_codes_per_run: int = 0
+
+    # === 市场同步筛选配置（优化点：同步前筛选股票）===
+    market_sync_filter_enabled: bool = True  # 启用同步前筛选
+    market_sync_target_count: int = 300  # 目标同步数量
+    market_sync_min_market_cap: float = 5_000_000_000  # 最小市值 50 亿
+    market_sync_min_turnover: float = 100_000_000  # 最小成交额 1 亿
+    market_sync_min_turnover_rate: float = 1.0  # 最小换手率 1%
+    market_sync_max_turnover_rate: float = 25.0  # 最大换手率 25%
+    market_sync_min_price: float = 3.0  # 最低股价 3 元
+    market_sync_exclude_prefixes: List[str] = field(default_factory=lambda: ["688", "300"])  # 排除科创板/创业板
+    market_sync_skip_fresh: bool = True  # 跳过已同步到最新的股票
+
+    # === 智能选股配置（从同步数据中选取股票参与分析）===
+    market_sync_stock_selection_enabled: bool = False  # 启用智能选股
+    market_sync_select_count: int = 10  # 选取股票数量
+    market_sync_selection_strategy: str = "best_performer"  # 选股策略
+
     # Extracted article content in-memory cache TTL (seconds)
     article_content_cache_ttl: int = 1800
     # 熔断器冷却时间（秒）
@@ -448,6 +473,10 @@ class Config:
             gemini_request_delay=float(os.getenv('GEMINI_REQUEST_DELAY', '2.0')),
             gemini_max_retries=int(os.getenv('GEMINI_MAX_RETRIES', '5')),
             gemini_retry_delay=float(os.getenv('GEMINI_RETRY_DELAY', '5.0')),
+            # LLM 缓存配置
+            llm_cache_enabled=os.getenv('LLM_CACHE_ENABLED', 'true').lower() == 'true',
+            llm_cache_ttl_hours=int(os.getenv('LLM_CACHE_TTL_HOURS', '24')),
+            llm_cache_max_size=int(os.getenv('LLM_CACHE_MAX_SIZE', '1000')),
             anthropic_api_key=os.getenv('ANTHROPIC_API_KEY'),
             anthropic_model=os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022'),
             anthropic_temperature=float(os.getenv('ANTHROPIC_TEMPERATURE', '0.7')),
@@ -585,6 +614,9 @@ class Config:
                 'ENABLE_REALTIME_TECHNICAL_INDICATORS', 'true'
             ).lower() == 'true',
             enable_chip_distribution=os.getenv('ENABLE_CHIP_DISTRIBUTION', 'true').lower() == 'true',
+            enable_fund_flow=os.getenv('ENABLE_FUND_FLOW', 'true').lower() == 'true',
+            enable_dragon_tiger=os.getenv('ENABLE_DRAGON_TIGER', 'true').lower() == 'true',
+            enable_sector_rotation=os.getenv('ENABLE_SECTOR_ROTATION', 'true').lower() == 'true',
             # 东财接口补丁开关
             enable_eastmoney_patch=os.getenv('ENABLE_EASTMONEY_PATCH', 'false').lower() == 'true',
             # 实时行情数据源优先级：
@@ -608,6 +640,23 @@ class Config:
             market_sync_incremental_days=max(1, int(os.getenv('MARKET_SYNC_INCREMENTAL_DAYS', '5'))),
             market_sync_sleep_seconds=max(0.0, float(os.getenv('MARKET_SYNC_SLEEP_SECONDS', '2.0'))),
             market_sync_max_codes_per_run=max(0, int(os.getenv('MARKET_SYNC_MAX_CODES_PER_RUN', '0'))),
+            # 市场同步筛选配置
+            market_sync_filter_enabled=os.getenv('MARKET_SYNC_FILTER_ENABLED', 'true').lower() == 'true',
+            market_sync_target_count=max(50, int(os.getenv('MARKET_SYNC_TARGET_COUNT', '300'))),
+            market_sync_min_market_cap=float(os.getenv('MARKET_SYNC_MIN_MARKET_CAP', '5000000000')),
+            market_sync_min_turnover=float(os.getenv('MARKET_SYNC_MIN_TURNOVER', '100000000')),
+            market_sync_min_turnover_rate=float(os.getenv('MARKET_SYNC_MIN_TURNOVER_RATE', '1.0')),
+            market_sync_max_turnover_rate=float(os.getenv('MARKET_SYNC_MAX_TURNOVER_RATE', '25.0')),
+            market_sync_min_price=float(os.getenv('MARKET_SYNC_MIN_PRICE', '3.0')),
+            market_sync_exclude_prefixes=[
+                p.strip() for p in os.getenv('MARKET_SYNC_EXCLUDE_PREFIXES', '688,300').split(',')
+                if p.strip()
+            ],
+            market_sync_skip_fresh=os.getenv('MARKET_SYNC_SKIP_FRESH', 'true').lower() == 'true',
+            # 智能选股配置
+            market_sync_stock_selection_enabled=os.getenv('MARKET_SYNC_STOCK_SELECTION_ENABLED', 'false').lower() == 'true',
+            market_sync_select_count=max(1, int(os.getenv('MARKET_SYNC_SELECT_COUNT', '10'))),
+            market_sync_selection_strategy=os.getenv('MARKET_SYNC_SELECTION_STRATEGY', 'best_performer'),
             article_content_cache_ttl=int(os.getenv('ARTICLE_CONTENT_CACHE_TTL', '1800')),
             circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300')),
             observability_warn_latency_ms=int(os.getenv('OBSERVABILITY_WARN_LATENCY_MS', '2000')),
