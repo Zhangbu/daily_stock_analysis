@@ -195,6 +195,7 @@ class AnalysisHistory(Base):
     code = Column(String(10), nullable=False, index=True)
     name = Column(String(50))
     report_type = Column(String(16), index=True)
+    source = Column(String(32), default='manual', index=True)  # 来源：manual(手动) / smart_selection(智能选股)
 
     # 核心结论
     sentiment_score = Column(Integer)
@@ -227,6 +228,7 @@ class AnalysisHistory(Base):
             'code': self.code,
             'name': self.name,
             'report_type': self.report_type,
+            'source': self.source,
             'sentiment_score': self.sentiment_score,
             'operation_advice': self.operation_advice,
             'trend_prediction': self.trend_prediction,
@@ -752,10 +754,20 @@ class DatabaseManager:
         report_type: str,
         news_content: Optional[str],
         context_snapshot: Optional[Dict[str, Any]] = None,
-        save_snapshot: bool = True
+        save_snapshot: bool = True,
+        source: str = 'manual'
     ) -> int:
         """
         保存分析结果历史记录
+
+        Args:
+            result: 分析结果对象
+            query_id: 查询 ID
+            report_type: 报告类型
+            news_content: 新闻内容
+            context_snapshot: 上下文快照
+            save_snapshot: 是否保存快照
+            source: 股票来源 (manual / smart_selection)
         """
         if result is None:
             return 0
@@ -771,6 +783,7 @@ class DatabaseManager:
             code=result.code,
             name=result.name,
             report_type=report_type,
+            source=source,
             sentiment_score=result.sentiment_score,
             operation_advice=result.operation_advice,
             trend_prediction=result.trend_prediction,
@@ -1313,6 +1326,13 @@ class DatabaseManager:
         # Path 2: direct dashboard traversal when standard path yields empty values
         if not any(raw_points.get(k) for k in ("ideal_buy", "secondary_buy", "stop_loss", "take_profit")):
             dashboard = getattr(result, "dashboard", None)
+            # Handle dashboard being a string (LLM JSON parsing issue)
+            if isinstance(dashboard, str):
+                try:
+                    import json
+                    dashboard = json.loads(dashboard)
+                except (json.JSONDecodeError, TypeError):
+                    dashboard = None
             if isinstance(dashboard, dict):
                 raw_points = self._find_sniper_in_dashboard(dashboard) or raw_points
 

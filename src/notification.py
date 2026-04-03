@@ -38,6 +38,18 @@ from bot.models import BotMessage
 logger = logging.getLogger(__name__)
 
 
+def _fix_json_string(json_str: str) -> str:
+    """Repair common JSON formatting issues produced by LLMs."""
+    import re
+    from json_repair import repair_json
+    json_str = re.sub(r"//.*?\n", "\n", json_str)
+    json_str = re.sub(r"/\*.*?\*/", "", json_str, flags=re.DOTALL)
+    json_str = re.sub(r",\s*}", "}", json_str)
+    json_str = re.sub(r",\s*]", "]", json_str)
+    json_str = json_str.replace("True", "true").replace("False", "false")
+    return repair_json(json_str)
+
+
 class NotificationService:
     """
     通知服务
@@ -576,6 +588,15 @@ class NotificationService:
         Returns:
             Markdown 格式的决策仪表盘日报
         """
+        # 检查所有 result 的 dashboard 类型
+        for r in results:
+            if hasattr(r, 'dashboard') and r.dashboard:
+                if isinstance(r.dashboard, str):
+                    logger.info(f"[{r.code}] dashboard 是字符串类型，长度：{len(r.dashboard)}")
+                elif isinstance(r.dashboard, dict):
+                    logger.info(f"[{r.code}] dashboard 是 dict 类型")
+                else:
+                    logger.warning(f"[{r.code}] dashboard 是未知类型：{type(r.dashboard)}")
         if report_date is None:
             report_date = datetime.now().strftime('%Y-%m-%d')
 
@@ -618,8 +639,14 @@ class NotificationService:
         if not self._report_summary_only:
             for result in sorted_results:
                 signal_text, signal_emoji, signal_tag = self._get_signal_level(result)
+                # Ensure dashboard is a dict, not a string (robust to LLM JSON parsing issues)
                 dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
-                
+                if isinstance(dashboard, str):
+                    try:
+                        dashboard = json.loads(dashboard)
+                    except (json.JSONDecodeError, TypeError):
+                        dashboard = {}
+
                 # 股票名称（优先使用 dashboard 或 result 中的名称，转义 *ST 等特殊字符）
                 raw_name = result.name if result.name and not result.name.startswith('股票') else f'股票{result.code}'
                 stock_name = self._escape_md(raw_name)
@@ -693,10 +720,37 @@ class NotificationService:
                 # ========== 数据透视 ==========
                 data_persp = dashboard.get('data_perspective', {}) if dashboard else {}
                 if data_persp:
+                    # Handle string types in nested dicts
+                    if isinstance(data_persp, str):
+                        try:
+                                data_persp = json.loads(data_persp)
+                        except (json.JSONDecodeError, TypeError):
+                            data_persp = {}
                     trend_data = data_persp.get('trend_status', {})
                     price_data = data_persp.get('price_position', {})
                     vol_data = data_persp.get('volume_analysis', {})
                     chip_data = data_persp.get('chip_structure', {})
+                    # Also handle string types in nested fields
+                    if isinstance(trend_data, str):
+                        try:
+                            trend_data = json.loads(trend_data)
+                        except (json.JSONDecodeError, TypeError):
+                            trend_data = {}
+                    if isinstance(price_data, str):
+                        try:
+                            price_data = json.loads(price_data)
+                        except (json.JSONDecodeError, TypeError):
+                            price_data = {}
+                    if isinstance(vol_data, str):
+                        try:
+                            vol_data = json.loads(vol_data)
+                        except (json.JSONDecodeError, TypeError):
+                            vol_data = {}
+                    if isinstance(chip_data, str):
+                        try:
+                            chip_data = json.loads(chip_data)
+                        except (json.JSONDecodeError, TypeError):
+                            chip_data = {}
                     
                     report_lines.extend([
                         "### 📊 数据透视",
@@ -750,6 +804,12 @@ class NotificationService:
                     ])
                     # 狙击点位
                     sniper = battle.get('sniper_points', {})
+                    # 确保 sniper 是字典类型（LLM 可能返回字符串）
+                    if isinstance(sniper, str):
+                        try:
+                            sniper = json.loads(_fix_json_string(sniper))
+                        except (json.JSONDecodeError, TypeError):
+                            sniper = {}
                     if sniper:
                         report_lines.extend([
                             "**📍 狙击点位**",
@@ -764,6 +824,12 @@ class NotificationService:
                         ])
                     # 仓位策略
                     position = battle.get('position_strategy', {})
+                    # 确保 position 是字典类型（LLM 可能返回字符串）
+                    if isinstance(position, str):
+                        try:
+                            position = json.loads(_fix_json_string(position))
+                        except (json.JSONDecodeError, TypeError):
+                            position = {}
                     if position:
                         report_lines.extend([
                             f"**💰 仓位建议**: {position.get('suggested_position', 'N/A')}",
@@ -843,6 +909,11 @@ class NotificationService:
         report_date = datetime.now().strftime('%Y-%m-%d %H:%M')
         signal_text, signal_emoji, _ = self._get_signal_level(result)
         dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
+        if isinstance(dashboard, str):
+            try:
+                dashboard = json.loads(dashboard)
+            except (json.JSONDecodeError, TypeError):
+                dashboard = {}
         core = dashboard.get('core_conclusion', {}) if dashboard else {}
         battle = dashboard.get('battle_plan', {}) if dashboard else {}
         intel = dashboard.get('intelligence', {}) if dashboard else {}
@@ -913,6 +984,12 @@ class NotificationService:
         
         # 狙击点位
         sniper = battle.get('sniper_points', {}) if battle else {}
+        # 确保 sniper 是字典类型（LLM 可能返回字符串）
+        if isinstance(sniper, str):
+            try:
+                sniper = json.loads(_fix_json_string(sniper))
+            except (json.JSONDecodeError, TypeError):
+                sniper = {}
         if sniper:
             lines.extend([
                 "### 🎯 操作点位",
@@ -928,6 +1005,12 @@ class NotificationService:
         
         # 持仓建议
         pos_advice = core.get('position_advice', {}) if core else {}
+        # 确保 pos_advice 是字典类型（LLM 可能返回字符串）
+        if isinstance(pos_advice, str):
+            try:
+                pos_advice = json.loads(_fix_json_string(pos_advice))
+            except (json.JSONDecodeError, TypeError):
+                pos_advice = {}
         if pos_advice:
             lines.extend([
                 "### 💼 持仓建议",
@@ -1842,7 +1925,7 @@ class NotificationService:
                 logger.warning("Markdown 转图片失败，将回退为文本发送")
 
         channel_names = self.get_channel_names()
-        logger.info(f"正在向 {len(self._available_channels)} 个渠道发送通知：{channel_names}")
+        logger.info(f"正在向 {len(self._available_channels)} 个渠道发送通知：{channel_names}，内容长度：{len(content)} 字符")
 
         success_count = 0
         fail_count = 0

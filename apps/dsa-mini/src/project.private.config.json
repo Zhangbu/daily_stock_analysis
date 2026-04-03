@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "list": [
+    {
+      "value": "default-icon-home",
+      "path": "../assets/icons/home.png"
+    },
+    {
+      "value": "default-icon-history",
+      "path": "../assets/icons/history.png"
+    },
+    {
+      "value": "default-icon-tasks",
+      "path": "../assets/icons/tasks.png"
+    },
+    {
+      "value": "default-icon-profile",
+      "path": "../assets/icons/profile.png"
+    }
+  ]
+}

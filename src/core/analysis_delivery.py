@@ -21,17 +21,33 @@ class AnalysisDeliveryService:
 
     def send_single_stock_report(self, *, code: str, result, report_type) -> bool:
         """Send a single-stock notification using the configured report format."""
+        import traceback
+        
+        logger.info(f"[{code}] 开始发送单股报告，报告类型：{report_type}")
+        logger.info(f"[{code}] 通知服务可用性：{self.notifier.is_available()}")
+        logger.info(f"[{code}] 可用的通知渠道：{self.notifier.get_available_channels()}")
+        logger.info(f"[{code}] dashboard 类型：{type(result.dashboard).__name__ if hasattr(result, 'dashboard') else 'N/A'}")
+
         if not self.notifier.is_available():
+            logger.warning(f"[{code}] 通知服务不可用，跳过推送")
             return False
 
-        if report_type.value == "full":
-            report_content = self.notifier.generate_dashboard_report([result])
-            logger.info(f"[{code}] 使用完整报告格式")
-        else:
-            report_content = self.notifier.generate_single_stock_report(result)
-            logger.info(f"[{code}] 使用精简报告格式")
+        try:
+            if report_type.value == "full":
+                report_content = self.notifier.generate_dashboard_report([result])
+                logger.info(f"[{code}] 使用完整报告格式，报告长度：{len(report_content)} 字符")
+            else:
+                report_content = self.notifier.generate_single_stock_report(result)
+                logger.info(f"[{code}] 使用精简报告格式，报告长度：{len(report_content)} 字符")
+        except Exception as e:
+            logger.exception(f"[{code}] 生成报告失败：{e}")
+            logger.error(f"[{code}] 堆栈跟踪：{traceback.format_exc()}")
+            return False
 
-        return self.notifier.send(report_content, email_stock_codes=[code])
+        logger.info(f"[{code}] 开始推送到通知渠道...")
+        result = self.notifier.send(report_content, email_stock_codes=[code])
+        logger.info(f"[{code}] 推送结果：{result}")
+        return result
 
     def send_batch_notifications(self, results: List, skip_push: bool = False) -> None:
         """Send or persist aggregated analysis notifications."""

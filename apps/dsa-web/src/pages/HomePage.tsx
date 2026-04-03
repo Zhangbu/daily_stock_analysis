@@ -287,6 +287,8 @@ const HomePage: React.FC = () => {
         onItemClick={(id) => { handleHistoryClick(id); setSidebarOpen(false); }}
         onLoadMore={handleLoadMore}
         className="max-h-[62vh] md:max-h-[62vh] flex-1 overflow-hidden"
+        manualCount={historyItems.filter(i => !i.source || i.source === 'manual').length}
+        smartCount={historyItems.filter(i => i.source === 'smart_selection').length}
       />
     </div>
   );

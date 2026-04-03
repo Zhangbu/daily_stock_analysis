@@ -1,0 +1,56 @@
+{
+  "miniprogramRoot": "dist/",
+  "projectname": "dsa-mini",
+  "description": "A 股自选股智能分析系统",
+  "appid": "wxYOUR_APP_ID_HERE",
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "preloadBackgroundData": false,
+    "minified": true,
+    "newFeature": true,
+    "coverView": true,
+    "nodeModules": true,
+    "autoAudits": false,
+    "showShadowRootInWxmlPanel": true,
+    "scopeDataCheck": false,
+    "uglifyFileName": false,
+    "checkInvalidKey": true,
+    "checkSiteMap": true,
+    "uploadWithSourceMap": true,
+    "compileHotReLoad": false,
+    "useMultiFrameRuntime": true,
+    "useApiHook": true,
+    "useApiHostProcess": true,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    },
+    "bundle": false,
+    "condition": false,
+    "minifyWXSS": true,
+    "disableUseStrict": false,
+    "minifyWXML": true,
+    "packNpmManually": true,
+    "packNpmRelationList": [
+      {
+        "packageJsonPath": "./package.json",
+        "miniprogramNpmDistDir": "./dist"
+      }
+    ],
+    "useIsolateContext": true,
+    "userConfirmedBundleSwitch": false,
+    "userConfirmedUseCompileBuild": true
+  },
+  "compileType": "miniprogram",
+  "libVersion": "3.3.4",
+  "srcMiniprogramRoot": "dist/",
+  "condition": {},
+  "editorSetting": {
+    "tabIndent": "insertSpaces",
+    "tabSize": 2
+  }
+}

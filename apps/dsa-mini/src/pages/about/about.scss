@@ -1,0 +1,152 @@
+.about-page {
+  min-height: 100vh;
+  background-color: #f5f6f8;
+}
+
+.page-header {
+  background: linear-gradient(135deg, #6B57FF 0%, #8A6FFF 100%);
+  padding: 24px 32px;
+  padding-bottom: 32px;
+}
+
+.page-title {
+  font-size: 36px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.page-content {
+  padding: 24px;
+}
+
+.logo-section {
+  background-color: #ffffff;
+  border-radius: 16px;
+  padding: 40px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.logo-icon {
+  font-size: 80px;
+  margin-bottom: 16px;
+}
+
+.app-name {
+  font-size: 36px;
+  font-weight: 600;
+  color: #333333;
+  margin-bottom: 8px;
+}
+
+.app-slogan {
+  font-size: 26px;
+  color: #999999;
+}
+
+.intro-section,
+.features-section,
+.contact-section {
+  background-color: #ffffff;
+  border-radius: 16px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.section-title {
+  font-size: 30px;
+  font-weight: 600;
+  color: #333333;
+  margin-bottom: 20px;
+  display: block;
+}
+
+.intro-text {
+  font-size: 28px;
+  color: #666666;
+  line-height: 1.8;
+  display: block;
+}
+
+.feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.feature-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px;
+  background-color: #fafafa;
+  border-radius: 12px;
+}
+
+.feature-icon {
+  font-size: 40px;
+  flex-shrink: 0;
+}
+
+.feature-info {
+  flex: 1;
+}
+
+.feature-title {
+  font-size: 28px;
+  font-weight: 500;
+  color: #333333;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.feature-desc {
+  font-size: 24px;
+  color: #999999;
+  display: block;
+}
+
+.contact-item {
+  padding: 20px 0;
+  border-bottom: 1px solid #f5f5f5;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.contact-label {
+  font-size: 28px;
+  color: #666666;
+}
+
+.contact-value {
+  font-size: 28px;
+  color: #6B57FF;
+  font-weight: 500;
+}
+
+.version-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 24px;
+
+  .version-text {
+    font-size: 26px;
+    color: #999999;
+    margin-bottom: 8px;
+  }
+
+  .copyright {
+    font-size: 24px;
+    color: #cccccc;
+  }
+}

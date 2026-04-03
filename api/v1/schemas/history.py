@@ -22,6 +22,7 @@ class HistoryItem(BaseModel):
     stock_code: str = Field(..., description="股票代码")
     stock_name: Optional[str] = Field(None, description="股票名称")
     report_type: Optional[str] = Field(None, description="报告类型")
+    source: Optional[str] = Field(None, description="股票来源 (manual / smart_selection)")
     sentiment_score: Optional[int] = Field(
         None, 
         description="情绪评分 (-100至100)",

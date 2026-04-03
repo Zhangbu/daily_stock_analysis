@@ -128,9 +128,11 @@ export interface HistoryItem {
   stockCode: string;
   stockName?: string;
   reportType?: string;
+  source?: 'manual' | 'smart_selection';  // 股票来源：手动 / 智能选股
   sentimentScore?: number;
   operationAdvice?: string;
   createdAt: string;
+  changePct?: number;  // 涨跌幅 (%)
 }
 
 /** 历史记录列表响应 */

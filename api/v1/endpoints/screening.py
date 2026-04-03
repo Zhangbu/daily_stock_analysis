@@ -21,6 +21,8 @@ from api.v1.schemas.screening import (
     ScreeningTopAnalysisSummaryResponse,
     StockScreeningRequest,
     StockScreeningResponse,
+    StockBatchAnalyzeRequest,
+    StockBatchAnalyzeResponse,
 )
 from api.v1.schemas.common import ErrorResponse
 from src.repositories.analysis_repo import AnalysisRepository
@@ -222,3 +224,81 @@ def get_top_analysis_summary(
             )
         )
     return ScreeningTopAnalysisSummaryResponse(items=items)
+
+
+@router.post(
+    "/batch-analyze",
+    response_model=StockBatchAnalyzeResponse,
+    responses={
+        200: {"description": "Batch analysis tasks submitted"},
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="Analyze filtered stocks in batch",
+    description="Submit batch analysis tasks for filtered stocks with source='smart_selection'"
+)
+def batch_analyze_stocks(request: StockBatchAnalyzeRequest) -> StockBatchAnalyzeResponse:
+    """
+    Submit batch analysis tasks for filtered stocks.
+
+    Args:
+        request: Batch analysis request with stock list
+
+    Returns:
+        StockBatchAnalyzeResponse: Task IDs for submitted analyses
+    """
+    import uuid
+    import threading
+    from src.core.pipeline import StockAnalysisPipeline
+    from src.core.config import get_config
+
+    try:
+        task_ids = []
+        config = get_config()
+
+        # Limit batch size to avoid overload
+        max_batch_size = getattr(config, 'max_batch_analyze_size', 10)
+        stocks_to_analyze = request.stocks[:max_batch_size]
+
+        def analyze_stock_task(stock: StockInfo, task_id: str):
+            """Background task to analyze a single stock."""
+            try:
+                pipeline = StockAnalysisPipeline(
+                    config=config,
+                    query_id=task_id,
+                    source='smart_selection',  # Mark as smart selection
+                )
+                from src.storage import ReportType
+                report_type = ReportType.DETAILED if request.report_type == 'detailed' else ReportType.SIMPLE
+                pipeline.analyze_stock(code=stock.code, report_type=report_type, query_id=task_id)
+            except Exception as e:
+                logger.error(f"Batch analysis task {task_id} failed for {stock.code}: {e}")
+
+        # Submit tasks in background threads
+        for stock in stocks_to_analyze:
+            task_id = uuid.uuid4().hex
+            task_ids.append(task_id)
+
+            # Start background thread for each stock
+            thread = threading.Thread(
+                target=analyze_stock_task,
+                args=(stock, task_id),
+                daemon=True
+            )
+            thread.start()
+
+        logger.info(f"Batch analysis submitted: {len(task_ids)} stocks")
+
+        return StockBatchAnalyzeResponse(
+            task_ids=task_ids,
+            message=f"已提交 {len(task_ids)} 只股票的分析任务"
+        )
+
+    except Exception as e:
+        logger.error(f"Batch analysis submission failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "internal_error",
+                "message": f"批量分析提交失败：{str(e)}"
+            }
+        )

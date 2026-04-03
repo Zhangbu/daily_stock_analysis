@@ -93,6 +93,7 @@ class AnalysisPersistenceService:
         report_type: str,
         news_content: Optional[str],
         context_snapshot: Dict[str, Any],
+        source: str = 'manual',
     ) -> None:
         """Persist the analysis history record."""
         self.analysis_repo.save(
@@ -102,4 +103,5 @@ class AnalysisPersistenceService:
             news_content=news_content,
             context_snapshot=context_snapshot,
             save_snapshot=self.save_context_snapshot,
+            source=source,
         )

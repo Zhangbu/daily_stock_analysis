@@ -1,0 +1,13 @@
+{
+  "miniprogramRoot": "dist/",
+  "projectname": "dsa-mini",
+  "description": "A 股自选股智能分析系统",
+  "appid": "YOUR_TT_APP_ID_HERE",
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "postcss": true,
+    "minified": true
+  },
+  "compileType": "miniprogram"
+}

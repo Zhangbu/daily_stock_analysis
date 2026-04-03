@@ -77,6 +77,16 @@ export interface ScreeningTopAnalysisItem {
   created_at?: string;
 }
 
+export interface StockBatchAnalyzeRequest {
+  stocks: StockInfo[];
+  reportType?: string;
+}
+
+export interface StockBatchAnalyzeResponse {
+  task_ids: string[];
+  message: string;
+}
+
 export const screeningApi = {
   async screenStocks(request: StockScreeningRequest): Promise<StockScreeningResponse> {
     const response = await apiClient.post('/api/v1/screening/filter', request);
@@ -95,6 +105,11 @@ export const screeningApi = {
 
   async getTopAnalysisSummary(codes: string[]): Promise<{ items: ScreeningTopAnalysisItem[] }> {
     const response = await apiClient.post('/api/v1/screening/top-analysis-summary', { codes });
+    return response.data;
+  },
+
+  async batchAnalyze(request: StockBatchAnalyzeRequest): Promise<StockBatchAnalyzeResponse> {
+    const response = await apiClient.post('/api/v1/screening/batch-analyze', request);
     return response.data;
   },
 };

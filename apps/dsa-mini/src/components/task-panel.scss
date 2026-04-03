@@ -1,0 +1,100 @@
+.task-panel {
+  margin: 0 24px 24px;
+  background-color: #ffffff;
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.panel-title {
+  font-size: 30px;
+  font-weight: 600;
+  color: #333333;
+}
+
+.task-count {
+  font-size: 24px;
+  color: #999999;
+  background-color: #f5f5f5;
+  padding: 8px 16px;
+  border-radius: 20px;
+}
+
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.task-item {
+  padding: 20px;
+  background-color: #fafafa;
+  border-radius: 16px;
+  border: 1px solid #f0f0f0;
+}
+
+.task-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.task-stock {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.task-stock-name {
+  font-size: 28px;
+  font-weight: 600;
+  color: #333333;
+}
+
+.task-stock-code {
+  font-size: 24px;
+  color: #999999;
+  font-family: monospace;
+}
+
+.task-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.task-status-text {
+  font-size: 26px;
+  font-weight: 500;
+}
+
+.task-progress-text {
+  font-size: 24px;
+  color: #1890ff;
+}
+
+.task-progress {
+  margin-top: 8px;
+}
+
+.task-error {
+  margin-top: 12px;
+  padding: 12px;
+  background-color: rgba(255, 77, 79, 0.08);
+  border-radius: 8px;
+
+  text {
+    font-size: 24px;
+    color: #ff4d4f;
+  }
+}

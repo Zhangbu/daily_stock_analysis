@@ -61,14 +61,16 @@ class StockAnalysisPipeline:
         source_message: Optional[BotMessage] = None,
         query_id: Optional[str] = None,
         query_source: Optional[str] = None,
-        save_context_snapshot: Optional[bool] = None
+        save_context_snapshot: Optional[bool] = None,
+        source: str = 'manual',
     ):
         """
         初始化调度器
-        
+
         Args:
             config: 配置对象（可选，默认使用全局配置）
             max_workers: 最大并发线程数（可选，默认从配置读取）
+            source: 股票来源 (manual / smart_selection)
         """
         self.config = config or get_config()
         self.max_workers = max_workers or self.config.max_workers
@@ -78,6 +80,7 @@ class StockAnalysisPipeline:
         self.save_context_snapshot = (
             self.config.save_context_snapshot if save_context_snapshot is None else save_context_snapshot
         )
+        self.source = source
         
         # 初始化各模块
         self.db = get_db()
@@ -426,6 +429,7 @@ class StockAnalysisPipeline:
                         report_type=report_type.value,
                         news_content=news_context,
                         context_snapshot=context_snapshot,
+                        source=self.source,
                     )
                 except Exception as e:
                     logger.warning(f"[{code}] 保存分析历史失败: {e}")
@@ -626,15 +630,36 @@ class StockAnalysisPipeline:
         if realtime_quote and trend_result and trend_result.ma5 > 0:
             price = getattr(realtime_quote, 'price', None)
             if price is not None and price > 0:
+                # Check if realtime OHLC data is reliable (not all equal to current price)
+                # During non-trading hours (lunch break 11:30-13:00 or after 15:00 close),
+                # some data sources may return open=high=low=price, which is unreliable.
+                open_p_raw = getattr(realtime_quote, 'open_price', None)
+                high_p_raw = getattr(realtime_quote, 'high', None)
+                low_p_raw = getattr(realtime_quote, 'low', None)
+
+                # Detect unreliable realtime OHLC: all equal to price or missing
+                ohlc_suspicious = (
+                    (open_p_raw is None or open_p_raw == price) and
+                    (high_p_raw is None or high_p_raw == price) and
+                    (low_p_raw is None or low_p_raw == price)
+                )
+
                 yesterday_close = None
                 if enhanced.get('yesterday') and isinstance(enhanced['yesterday'], dict):
                     yesterday_close = enhanced['yesterday'].get('close')
                 orig_today = enhanced.get('today') or {}
-                open_p = getattr(realtime_quote, 'open_price', None) or getattr(
-                    realtime_quote, 'pre_close', None
-                ) or yesterday_close or orig_today.get('open') or price
-                high_p = getattr(realtime_quote, 'high', None) or price
-                low_p = getattr(realtime_quote, 'low', None) or price
+
+                if ohlc_suspicious and orig_today.get('open') and orig_today.get('high') and orig_today.get('low'):
+                    # Use historical OHLC from database when realtime data is unreliable
+                    open_p = orig_today.get('open')
+                    high_p = orig_today.get('high')
+                    low_p = orig_today.get('low')
+                    logger.debug(f"[{code}] 实时 OHLC 数据可疑 (open=high=low=price)，使用数据库历史数据")
+                else:
+                    # Use realtime OHLC with fallbacks
+                    open_p = open_p_raw or getattr(realtime_quote, 'pre_close', None) or yesterday_close or orig_today.get('open') or price
+                    high_p = high_p_raw or price
+                    low_p = low_p_raw or price
                 vol = getattr(realtime_quote, 'volume', None)
                 amt = getattr(realtime_quote, 'amount', None)
                 pct = getattr(realtime_quote, 'change_pct', None)
@@ -765,6 +790,7 @@ class StockAnalysisPipeline:
                         report_type=report_type.value,
                         news_content=None,
                         context_snapshot=initial_context,
+                        source=self.source,
                     )
                 except Exception as e:
                     logger.warning(f"[{code}] 保存 Agent 分析历史失败: {e}")

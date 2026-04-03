@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { screeningApi, type ScreeningSnapshotItem, type ScreeningTopAnalysisItem, type StockScreeningRequest, type StockInfo, type StockScreeningSummary } from '../api/screening';
 import { marketSyncApi, type MarketSyncStatus } from '../api/marketSync';
 import { systemConfigApi, SystemConfigConflictError } from '../api/systemConfig';
-import { analysisApi, DuplicateTaskError } from '../api/analysis';
+import { analysisApi } from '../api/analysis';
 import { Loading } from '../components/common/Loading';
 import { Button } from '../components/common';
 
@@ -307,30 +307,23 @@ const ScreeningPage: React.FC = () => {
       setError('当前没有可分析的候选股票');
       return;
     }
-    const topCodes = stocks.slice(0, Math.min(5, stocks.length)).map((stock) => stock.code);
+    const topStocks = stocks.slice(0, Math.min(5, stocks.length));
     setBatchAnalyzeLoading(true);
     setError(null);
     setActionMessage(null);
-    let accepted = 0;
-    const duplicates: string[] = [];
 
-    for (const code of topCodes) {
-      try {
-        await analysisApi.analyzeAsync({ stockCode: code, reportType: 'detailed' });
-        accepted += 1;
-      } catch (err) {
-        if (err instanceof DuplicateTaskError) {
-          duplicates.push(code);
-        } else {
-          console.error('Failed to submit analysis task:', code, err);
-        }
-      }
+    try {
+      // Use the new batch analyze API with smart_selection source
+      const response = await screeningApi.batchAnalyze({ stocks: topStocks, reportType: 'detailed' });
+      setActionMessage(response.message || `已提交 ${response.task_ids?.length || 0} 个推荐股分析任务`);
+    } catch (err) {
+      console.error('Batch analysis failed:', err);
+      setError(err instanceof Error ? err.message : '批量分析失败');
+    } finally {
+      setBatchAnalyzeLoading(false);
     }
-
-    const duplicateText = duplicates.length ? `；重复任务: ${duplicates.join(', ')}` : '';
-    setActionMessage(`已提交 ${accepted} 个 Top 候选分析任务${duplicateText}`);
-    setBatchAnalyzeLoading(false);
   };
+
 
   const handleAddToWatchlist = async (code: string) => {
     setWatchlistLoadingCode(code);

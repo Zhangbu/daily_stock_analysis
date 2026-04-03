@@ -1,8 +1,10 @@
 import type React from 'react';
-import { useRef, useCallback, useEffect } from 'react';
+import { useRef, useCallback, useEffect, useState } from 'react';
 import type { HistoryItem } from '../../types/analysis';
 import { getSentimentColor } from '../../types/analysis';
-import { formatDateTime } from '../../utils/format';
+import { formatDateTime, formatChangePct, getChangePctColor } from '../../utils/format';
+
+type SourceFilter = 'all' | 'manual' | 'smart_selection';
 
 interface HistoryListProps {
   items: HistoryItem[];
@@ -13,6 +15,8 @@ interface HistoryListProps {
   onItemClick: (recordId: number) => void;  // Callback with record ID
   onLoadMore: () => void;
   className?: string;
+  manualCount?: number;  // 手动选股数量
+  smartCount?: number;  // 智能选股数量
 }
 
 /**
@@ -28,9 +32,24 @@ export const HistoryList: React.FC<HistoryListProps> = ({
   onItemClick,
   onLoadMore,
   className = '',
+  manualCount,
+  smartCount,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const loadMoreTriggerRef = useRef<HTMLDivElement>(null);
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
+
+  // 根据筛选条件过滤历史项
+  const filteredItems = items.filter(item => {
+    if (sourceFilter === 'all') return true;
+    if (sourceFilter === 'manual') return !item.source || item.source === 'manual';
+    if (sourceFilter === 'smart_selection') return item.source === 'smart_selection';
+    return true;
+  });
+
+  // 计算手动和智能选股数量（仅当未传入时）
+  const computedManualCount = manualCount ?? items.filter(i => !i.source || i.source === 'manual').length;
+  const computedSmartCount = smartCount ?? items.filter(i => i.source === 'smart_selection').length;
 
   // 使用 IntersectionObserver 检测滚动到底部
   const handleObserver = useCallback(
@@ -45,7 +64,7 @@ export const HistoryList: React.FC<HistoryListProps> = ({
         }
       }
     },
-    [hasMore, isLoading, isLoadingMore, onLoadMore]
+    [hasMore, isLoading, isLoadingMore, onLoadMore, sourceFilter]
   );
 
   useEffect(() => {
@@ -69,24 +88,81 @@ export const HistoryList: React.FC<HistoryListProps> = ({
   return (
     <aside className={`glass-card overflow-hidden flex flex-col ${className}`}>
       <div ref={scrollContainerRef} className="p-3 flex-1 overflow-y-auto">
-        <h2 className="text-xs font-medium text-purple uppercase tracking-wider mb-3 flex items-center gap-1.5">
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          历史记录
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xs font-medium text-purple uppercase tracking-wider flex items-center gap-1.5">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            历史记录
+          </h2>
+        </div>
+
+        {/* 来源筛选标签页 */}
+        <div className="flex gap-1 mb-3 pb-2 border-b border-white/5">
+          <button
+            type="button"
+            onClick={() => setSourceFilter('all')}
+            className={`px-2 py-1 text-xs rounded transition-colors ${
+              sourceFilter === 'all'
+                ? 'bg-purple/20 text-purple border border-purple/30'
+                : 'text-muted hover:text-white hover:bg-white/5'
+            }`}
+          >
+            全部 ({items.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setSourceFilter('manual')}
+            className={`px-2 py-1 text-xs rounded transition-colors ${
+              sourceFilter === 'manual'
+                ? 'bg-cyan/20 text-cyan border border-cyan/30'
+                : 'text-muted hover:text-white hover:bg-white/5'
+            }`}
+          >
+            自选 ({computedManualCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => setSourceFilter('smart_selection')}
+            className={`px-2 py-1 text-xs rounded transition-colors ${
+              sourceFilter === 'smart_selection'
+                ? 'bg-amber/20 text-amber border border-amber/30'
+                : 'text-muted hover:text-white hover:bg-white/5'
+            }`}
+          >
+            推荐 ({computedSmartCount})
+          </button>
+        </div>
 
         {isLoading ? (
           <div className="flex justify-center py-6">
             <div className="w-5 h-5 border-2 border-cyan/20 border-t-cyan rounded-full animate-spin" />
           </div>
-        ) : items.length === 0 ? (
-          <div className="text-center py-6 text-muted text-xs">
-            暂无历史记录
+        ) : filteredItems.length === 0 ? (
+          <div className="text-center py-8">
+            <div className="w-10 h-10 mb-3 rounded-xl bg-white/5 flex items-center justify-center mx-auto">
+              <svg className="w-5 h-5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <p className="text-sm text-muted mb-1">
+              {items.length === 0
+                ? '暂无历史记录'
+                : sourceFilter === 'manual'
+                  ? '暂无自选股记录'
+                  : sourceFilter === 'smart_selection'
+                    ? '暂无推荐股记录'
+                    : '该分类下暂无记录'}
+            </p>
+            {items.length === 0 && (
+              <p className="text-xs text-muted/70">
+                在上方输入股票代码开始分析
+              </p>
+            )}
           </div>
         ) : (
           <div className="space-y-1.5">
-            {items.map((item) => (
+            {filteredItems.map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -107,9 +183,17 @@ export const HistoryList: React.FC<HistoryListProps> = ({
                   )}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-1.5">
-                      <span className="font-medium text-white truncate text-xs">
-                        {item.stockName || item.stockCode}
-                      </span>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="font-medium text-white truncate text-xs">
+                          {item.stockName || item.stockCode}
+                        </span>
+                        {/* 智能选股标识 */}
+                        {item.source === 'smart_selection' && (
+                          <span className="flex-shrink-0 px-1 py-0.5 text-[10px] rounded bg-amber/20 text-amber border border-amber/30 font-medium">
+                            荐
+                          </span>
+                        )}
+                      </div>
                       {item.sentimentScore !== undefined && (
                         <span
                           className="text-xs font-mono font-semibold px-1 py-0.5 rounded"
@@ -130,6 +214,18 @@ export const HistoryList: React.FC<HistoryListProps> = ({
                       <span className="text-xs text-muted">
                         {formatDateTime(item.createdAt)}
                       </span>
+                      {/* 涨跌幅显示 */}
+                      {item.changePct !== undefined && (
+                        <>
+                          <span className="text-xs text-muted/50">·</span>
+                          <span
+                            className="text-xs font-mono font-medium"
+                            style={{ color: getChangePctColor(item.changePct) }}
+                          >
+                            {formatChangePct(item.changePct)}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -147,9 +243,9 @@ export const HistoryList: React.FC<HistoryListProps> = ({
             )}
 
             {/* 没有更多数据提示 */}
-            {!hasMore && items.length > 0 && (
+            {!hasMore && filteredItems.length > 0 && (
               <div className="text-center py-2 text-muted/50 text-xs">
-                已加载全部
+                {sourceFilter === 'all' ? '已加载全部' : '当前分类下已加载全部'}
               </div>
             )}
           </div>

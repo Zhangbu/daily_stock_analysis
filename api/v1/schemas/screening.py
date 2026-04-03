@@ -180,3 +180,17 @@ class ScreeningTopAnalysisItem(BaseModel):
 
 class ScreeningTopAnalysisSummaryResponse(BaseModel):
     items: List[ScreeningTopAnalysisItem] = Field(default_factory=list)
+
+
+class StockBatchAnalyzeRequest(BaseModel):
+    """Request for batch stock analysis."""
+
+    stocks: List[StockInfo] = Field(..., description="Stock list to analyze")
+    report_type: str = Field(default="detailed", description="Report type: simple/detailed")
+
+
+class StockBatchAnalyzeResponse(BaseModel):
+    """Response for batch stock analysis."""
+
+    task_ids: List[str] = Field(default_factory=list, description="Task IDs for submitted analyses")
+    message: str = Field(default="批量分析任务已提交", description="Status message")

@@ -97,6 +97,14 @@ def parse_response(response_text: str, code: str, name: str, result_cls: Type) -
             else:
                 decision_type = "hold"
 
+        # Ensure dashboard is a dict, not a string (LLM JSON parsing issue fix)
+        if isinstance(dashboard, str):
+            try:
+                dashboard = json.loads(fix_json_string(dashboard))
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(f"dashboard JSON 解析失败：{e}")
+                dashboard = {}
+
         return result_cls(
             code=code,
             name=name,

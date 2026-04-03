@@ -94,6 +94,7 @@ class HistoryService:
                     "stock_code": record.code,
                     "stock_name": record.name,
                     "report_type": record.report_type,
+                    "source": record.source,
                     "sentiment_score": record.sentiment_score,
                     "operation_advice": record.operation_advice,
                     "created_at": record.created_at.isoformat() if record.created_at else None,

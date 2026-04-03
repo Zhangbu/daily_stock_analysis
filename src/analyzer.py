@@ -286,36 +286,100 @@ class AnalysisResult:
 
     def get_core_conclusion(self) -> str:
         """获取核心结论（一句话）"""
-        if self.dashboard and 'core_conclusion' in self.dashboard:
-            return self.dashboard['core_conclusion'].get('one_sentence', self.analysis_summary)
-        return self.analysis_summary
+        if not self.dashboard:
+            return self.analysis_summary
+        # Handle dashboard being a string (LLM JSON parsing issue)
+        dashboard = self.dashboard
+        if isinstance(dashboard, str):
+            try:
+                import json
+                dashboard = json.loads(dashboard)
+            except (json.JSONDecodeError, TypeError):
+                return self.analysis_summary
+        if not isinstance(dashboard, dict) or 'core_conclusion' not in dashboard:
+            return self.analysis_summary
+        core_conclusion = dashboard.get('core_conclusion', {})
+        if not isinstance(core_conclusion, dict):
+            return self.analysis_summary
+        return core_conclusion.get('one_sentence', self.analysis_summary)
 
     def get_position_advice(self, has_position: bool = False) -> str:
         """获取持仓建议"""
-        if self.dashboard and 'core_conclusion' in self.dashboard:
-            pos_advice = self.dashboard['core_conclusion'].get('position_advice', {})
-            if has_position:
-                return pos_advice.get('has_position', self.operation_advice)
-            return pos_advice.get('no_position', self.operation_advice)
-        return self.operation_advice
+        if not self.dashboard:
+            return self.operation_advice
+        dashboard = self.dashboard
+        if isinstance(dashboard, str):
+            try:
+                import json
+                dashboard = json.loads(dashboard)
+            except (json.JSONDecodeError, TypeError):
+                return self.operation_advice
+        if not isinstance(dashboard, dict) or 'core_conclusion' not in dashboard:
+            return self.operation_advice
+        core_conclusion = dashboard.get('core_conclusion', {})
+        if not isinstance(core_conclusion, dict):
+            return self.operation_advice
+        pos_advice = core_conclusion.get('position_advice', {})
+        if not isinstance(pos_advice, dict):
+            return self.operation_advice
+        if has_position:
+            return pos_advice.get('has_position', self.operation_advice)
+        return pos_advice.get('no_position', self.operation_advice)
 
     def get_sniper_points(self) -> Dict[str, str]:
         """获取狙击点位"""
-        if self.dashboard and 'battle_plan' in self.dashboard:
-            return self.dashboard['battle_plan'].get('sniper_points', {})
-        return {}
+        if not self.dashboard:
+            return {}
+        # Handle dashboard being a string (LLM JSON parsing issue)
+        dashboard = self.dashboard
+        if isinstance(dashboard, str):
+            try:
+                import json
+                dashboard = json.loads(dashboard)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        if not isinstance(dashboard, dict) or 'battle_plan' not in dashboard:
+            return {}
+        battle_plan = dashboard.get('battle_plan', {})
+        if not isinstance(battle_plan, dict):
+            return {}
+        return battle_plan.get('sniper_points', {})
 
     def get_checklist(self) -> List[str]:
         """获取检查清单"""
-        if self.dashboard and 'battle_plan' in self.dashboard:
-            return self.dashboard['battle_plan'].get('action_checklist', [])
-        return []
+        if not self.dashboard:
+            return []
+        dashboard = self.dashboard
+        if isinstance(dashboard, str):
+            try:
+                import json
+                dashboard = json.loads(dashboard)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        if not isinstance(dashboard, dict) or 'battle_plan' not in dashboard:
+            return []
+        battle_plan = dashboard.get('battle_plan', {})
+        if not isinstance(battle_plan, dict):
+            return []
+        return battle_plan.get('action_checklist', [])
 
     def get_risk_alerts(self) -> List[str]:
         """获取风险警报"""
-        if self.dashboard and 'intelligence' in self.dashboard:
-            return self.dashboard['intelligence'].get('risk_alerts', [])
-        return []
+        if not self.dashboard:
+            return []
+        dashboard = self.dashboard
+        if isinstance(dashboard, str):
+            try:
+                import json
+                dashboard = json.loads(dashboard)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        if not isinstance(dashboard, dict) or 'intelligence' not in dashboard:
+            return []
+        intelligence = dashboard.get('intelligence', {})
+        if not isinstance(intelligence, dict):
+            return []
+        return intelligence.get('risk_alerts', [])
 
     def get_emoji(self) -> str:
         """根据操作建议返回对应 emoji"""
@@ -1073,7 +1137,29 @@ dashboard 结构必须包含：
         risk_factors = self._compact_prompt_items(trend.get('risk_factors'))
 
         today = context.get('today', {})
-        
+
+        # 数据验证：确保最高价 >= 最低价 >= 0，否则进行修正
+        if today:
+            high = today.get('high')
+            low = today.get('low')
+            close = today.get('close')
+            open_price = today.get('open')
+
+            # 如果 high < low，说明数据有误，进行修正
+            if high is not None and low is not None and high < low:
+                logger.warning(f"[{code}] 数据异常：highest({high}) < low({low})，正在修正...")
+                # 交换 high 和 low
+                today['high'], today['low'] = low, high
+
+            # 如果 close 或 open 超出 high-low 范围，也进行修正
+            if high is not None and low is not None:
+                if close is not None and (close > high or close < low):
+                    logger.warning(f"[{code}] 收盘价超出范围，修正为 (high+low)/2")
+                    today['close'] = (high + low) / 2
+                if open_price is not None and (open_price > high or open_price < low):
+                    logger.warning(f"[{code}] 开盘价超出范围，修正为 (high+low)/2")
+                    today['open'] = (high + low) / 2
+
         # ========== 构建决策仪表盘格式的输入 ==========
         prompt = f"""# 决策仪表盘分析请求
 
@@ -1084,18 +1170,18 @@ dashboard 结构必须包含：
 
 ## 技术面数据
 ### 今日行情
-- 收盘价: {today.get('close', 'N/A')} 元
-- 开盘价: {today.get('open', 'N/A')} 元
-- 最高价: {today.get('high', 'N/A')} 元
-- 最低价: {today.get('low', 'N/A')} 元
-- 涨跌幅: {today.get('pct_chg', 'N/A')}%
+- 收盘价: {self._format_price(today.get('close'))} 元
+- 开盘价: {self._format_price(today.get('open'))} 元
+- 最高价: {self._format_price(today.get('high'))} 元
+- 最低价: {self._format_price(today.get('low'))} 元
+- 涨跌幅: {self._format_percent(today.get('pct_chg'))}
 - 成交量: {self._format_volume(today.get('volume'))}
 - 成交额: {self._format_amount(today.get('amount'))}
 
 ### 均线系统
-- MA5: {today.get('ma5', 'N/A')}
-- MA10: {today.get('ma10', 'N/A')}
-- MA20: {today.get('ma20', 'N/A')}
+- MA5: {self._format_price(today.get('ma5'))}
+- MA10: {self._format_price(today.get('ma10'))}
+- MA20: {self._format_price(today.get('ma20'))}
 - 均线形态: {context.get('ma_status', '未知')}
 """
         
@@ -1104,14 +1190,14 @@ dashboard 结构必须包含：
             rt = context['realtime']
             prompt += f"""
 ### 实时行情增强数据
-- 当前价格: {rt.get('price', 'N/A')} 元
+- 当前价格: {self._format_price(rt.get('price'))} 元
 - 量比: {rt.get('volume_ratio', 'N/A')} ({rt.get('volume_ratio_desc', '')})
-- 换手率: {rt.get('turnover_rate', 'N/A')}%
+- 换手率: {self._format_percent(rt.get('turnover_rate'))}
 - 市盈率(动态): {rt.get('pe_ratio', 'N/A')}
 - 市净率: {rt.get('pb_ratio', 'N/A')}
 - 总市值: {self._format_amount(rt.get('total_mv'))}
 - 流通市值: {self._format_amount(rt.get('circ_mv'))}
-- 60日涨跌幅: {rt.get('change_60d', 'N/A')}%
+- 60日涨跌幅: {self._format_percent(rt.get('change_60d'))}
 """
         
         # 添加筹码分布数据

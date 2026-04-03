@@ -43,3 +43,18 @@ export const formatReportType = (value?: string): string => {
   if (value === 'detailed') return '标准';
   return value;
 };
+
+/** 格式化涨跌幅，带颜色标识 */
+export const formatChangePct = (value?: number): string => {
+  if (value === undefined || value === null || Number.isNaN(value)) return '—';
+  const sign = value >= 0 ? '+' : '';
+  return `${sign}${value.toFixed(2)}%`;
+};
+
+/** 获取涨跌幅颜色 */
+export const getChangePctColor = (value?: number): string => {
+  if (value === undefined || value === null || Number.isNaN(value)) return '#9ca3af'; // muted
+  if (value > 0) return '#ef4444'; // red (A 股上涨为红)
+  if (value < 0) return '#22c55e'; // green (A 股下跌为绿)
+  return '#9ca3af'; // neutral
+};

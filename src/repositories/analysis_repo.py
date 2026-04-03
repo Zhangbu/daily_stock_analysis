@@ -88,6 +88,7 @@ class AnalysisRepository:
         news_content: Optional[str] = None,
         context_snapshot: Optional[Dict[str, Any]] = None,
         save_snapshot: bool = True,
+        source: str = 'manual',
     ) -> int:
         """
         保存分析结果
@@ -110,6 +111,7 @@ class AnalysisRepository:
                 news_content=news_content,
                 context_snapshot=context_snapshot,
                 save_snapshot=save_snapshot,
+                source=source,
             )
         except Exception as e:
             logger.error(f"保存分析结果失败: {e}")
