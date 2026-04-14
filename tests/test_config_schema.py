@@ -16,7 +16,11 @@ class ConfigSchemaTestCase(unittest.TestCase):
         self.assertIn("runtime", groups)
         self.assertIn("hk_stock_list", groups["stocks"])
         self.assertIn("market_data_cache_ttl", groups["runtime"])
+        self.assertIn("schedule_interval_minutes", groups["runtime"])
         self.assertIn("enable_agent_api", groups["api_features"])
+        self.assertIn("llm_response_style", groups["ai"])
+        self.assertIn("gemini_api_keys", groups["ai"])
+        self.assertIn("gemini_per_model_rpm", groups["ai"])
 
     def test_export_schema_contains_group_items(self):
         config = Config(stock_list=["600519"], openai_api_key="secret")

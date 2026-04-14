@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { screeningApi, type ScreeningSnapshotItem, type ScreeningTopAnalysisItem, type StockScreeningRequest, type StockInfo, type StockScreeningSummary } from '../api/screening';
 import { marketSyncApi, type MarketSyncStatus } from '../api/marketSync';
 import { systemConfigApi, SystemConfigConflictError } from '../api/systemConfig';
-import { analysisApi } from '../api/analysis';
 import { Loading } from '../components/common/Loading';
 import { Button } from '../components/common';
 

@@ -99,6 +99,25 @@ class Scheduler:
         if run_immediately:
             logger.info("立即执行一次任务...")
             self._safe_run_task()
+
+    def set_interval_task(self, task: Callable, interval_minutes: int, run_immediately: bool = True):
+        """
+        设置按间隔执行任务
+
+        Args:
+            task: 要执行的任务函数（无参数）
+            interval_minutes: 间隔分钟数（>0）
+            run_immediately: 是否在设置后立即执行一次
+        """
+        self._task_callback = task
+        interval = max(1, int(interval_minutes))
+
+        self.schedule.every(interval).minutes.do(self._safe_run_task)
+        logger.info(f"已设置间隔任务，每 {interval} 分钟执行一次")
+
+        if run_immediately:
+            logger.info("立即执行一次任务...")
+            self._safe_run_task()
     
     def _safe_run_task(self):
         """安全执行任务（带异常捕获）"""
@@ -153,6 +172,7 @@ class Scheduler:
 def run_with_schedule(
     task: Callable,
     schedule_time: str = "18:00",
+    interval_minutes: int = 0,
     run_immediately: bool = True
 ):
     """
@@ -161,10 +181,14 @@ def run_with_schedule(
     Args:
         task: 要执行的任务函数
         schedule_time: 每日执行时间
+        interval_minutes: 间隔执行分钟数，>0 时启用间隔模式
         run_immediately: 是否立即执行一次
     """
     scheduler = Scheduler(schedule_time=schedule_time)
-    scheduler.set_daily_task(task, run_immediately=run_immediately)
+    if interval_minutes and interval_minutes > 0:
+        scheduler.set_interval_task(task, interval_minutes=interval_minutes, run_immediately=run_immediately)
+    else:
+        scheduler.set_daily_task(task, run_immediately=run_immediately)
     scheduler.run()
 
 

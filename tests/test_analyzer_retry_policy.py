@@ -38,6 +38,40 @@ class AnalyzerRetryPolicyTestCase(unittest.TestCase):
 
         self.assertEqual(analyzer._openai_client.chat.completions.create.call_count, 1)
 
+    @patch("src.analyzer.get_config")
+    def test_gemini_retry_switches_api_key_on_rate_limit(self, mock_get_config: Mock) -> None:
+        mock_get_config.return_value = SimpleNamespace(
+            gemini_max_retries=3,
+            gemini_retry_delay=0,
+            gemini_per_model_rpm=5,
+            gemini_per_model_daily_limit=20,
+            gemini_model_fallback="gemini-2.5-flash",
+            anthropic_api_key=None,
+            openai_api_key=None,
+        )
+
+        analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
+        analyzer._use_anthropic = False
+        analyzer._use_openai = False
+        analyzer._anthropic_client = None
+        analyzer._openai_client = None
+        analyzer._using_fallback = False
+        analyzer._current_model_name = "gemini-3-flash-preview"
+        analyzer._gemini_api_keys = ["key-1-123456", "key-2-123456"]
+        analyzer._gemini_key_index = 0
+        analyzer._model = SimpleNamespace(
+            generate_content=Mock(
+                side_effect=[RuntimeError("429 quota exceeded"), SimpleNamespace(text="ok")]
+            )
+        )
+        analyzer._switch_gemini_api_key = Mock(return_value=True)
+        analyzer._switch_to_fallback_model = Mock(return_value=False)
+
+        result = analyzer._call_api_with_retry("hello", {"temperature": 0.3})
+
+        self.assertEqual(result, "ok")
+        analyzer._switch_gemini_api_key.assert_called_once_with(reason="rate limit")
+
     def test_prompt_compaction_trims_news_and_reason_lists(self) -> None:
         analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
         analyzer._MAX_PROMPT_NEWS_CHARS = 1800

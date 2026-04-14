@@ -129,6 +129,10 @@ class SystemConfigApiTestCase(unittest.TestCase):
         self.assertIn("STOCK_LIST", keys)
         self.assertIn("HK_STOCK_LIST", keys)
         self.assertIn("OPENAI_MODEL", keys)
+        self.assertIn("GEMINI_API_KEYS", keys)
+        self.assertIn("GEMINI_PER_MODEL_RPM", keys)
+        self.assertIn("GEMINI_PER_MODEL_DAILY_LIMIT", keys)
+        self.assertIn("LLM_RESPONSE_STYLE", keys)
         self.assertIn("EMAIL_SENDER", keys)
         self.assertIn("MARKET_SYNC_MARKETS", keys)
         self.assertIn("ENABLE_REALTIME_QUOTE", keys)
@@ -146,6 +150,8 @@ class SystemConfigApiTestCase(unittest.TestCase):
         self.assertIn("STOCK_LIST", keys)
         self.assertIn("HK_STOCK_LIST", keys)
         self.assertIn("ENABLE_AGENT_API", keys)
+        self.assertIn("LLM_RESPONSE_STYLE", keys)
+        self.assertIn("GEMINI_PER_MODEL_RPM", keys)
         self.assertNotIn("LOG_LEVEL", keys)
 
 

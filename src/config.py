@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv, dotenv_values
 from dataclasses import dataclass, field, fields
 
+from src.llm.response_style import normalize_response_style
+
 
 def setup_env(override: bool = False):
     """
@@ -63,6 +65,7 @@ class Config:
     
     # === AI 分析配置 ===
     gemini_api_key: Optional[str] = None
+    gemini_api_keys: List[str] = field(default_factory=list)  # Optional key pool for automatic failover
     gemini_model: str = "gemini-3-flash-preview"  # 主模型
     gemini_model_fallback: str = "gemini-2.5-flash"  # 备选模型
     gemini_temperature: float = 0.7  # 温度参数（0.0-2.0，控制输出随机性，默认0.7）
@@ -71,6 +74,8 @@ class Config:
     gemini_request_delay: float = 1.0  # 请求间隔（秒）（优化点 7：从 2.0 降至 1.0）
     gemini_max_retries: int = 5  # 最大重试次数
     gemini_retry_delay: float = 5.0  # 重试基础延时（秒）
+    gemini_per_model_rpm: int = 5  # 每个 Gemini 模型每分钟最大请求数
+    gemini_per_model_daily_limit: int = 20  # 每个 Gemini 模型每天最大请求数
 
     # LLM 响应缓存配置（优化点 6：减少重复调用）
     llm_cache_enabled: bool = True  # 启用 LLM 响应缓存
@@ -89,6 +94,7 @@ class Config:
     openai_model: str = "gpt-4o-mini"  # OpenAI 兼容模型名称
     openai_vision_model: Optional[str] = None  # Vision 专用模型（可选，不配置则用 openai_model；部分模型如 DeepSeek 不支持图像）
     openai_temperature: float = 0.7  # OpenAI 温度参数（0.0-2.0，默认0.7）
+    llm_response_style: str = "normal"  # normal/caveman_lite/caveman_full/caveman_ultra
 
     # === 搜索引擎配置（支持多 Key 负载均衡）===
     bocha_api_keys: List[str] = field(default_factory=list)  # Bocha API Keys
@@ -227,6 +233,7 @@ class Config:
     # === 定时任务配置 ===
     schedule_enabled: bool = False            # 是否启用定时任务
     schedule_time: str = "18:00"              # 每日推送时间（HH:MM 格式）
+    schedule_interval_minutes: int = 0         # 间隔触发（分钟），>0 时优先于每日定时
     schedule_run_immediately: bool = True     # 启动时是否立即执行一次
     run_immediately: bool = True              # 启动时是否立即执行一次（非定时模式）
     market_review_enabled: bool = True        # 是否启用大盘复盘
@@ -432,6 +439,15 @@ class Config:
         if not stock_list and not hk_stock_list and not us_stock_list:
             stock_list = ['600519', '000001', '300750']
         
+        # 解析 Gemini API Keys（支持多个 key，逗号分隔）
+        gemini_keys_str = os.getenv('GEMINI_API_KEYS', '')
+        gemini_api_keys = [k.strip() for k in gemini_keys_str.split(',') if k.strip()]
+
+        # Backward compatibility: keep GEMINI_API_KEY and include it in pool if missing
+        gemini_api_key = os.getenv('GEMINI_API_KEY')
+        if gemini_api_key and gemini_api_key.strip() and gemini_api_key not in gemini_api_keys:
+            gemini_api_keys.insert(0, gemini_api_key.strip())
+
         # 解析搜索引擎 API Keys（支持多个 key，逗号分隔）
         bocha_keys_str = os.getenv('BOCHA_API_KEYS', '')
         bocha_api_keys = [k.strip() for k in bocha_keys_str.split(',') if k.strip()]
@@ -466,13 +482,16 @@ class Config:
             feishu_app_secret=os.getenv('FEISHU_APP_SECRET'),
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),
             tushare_token=os.getenv('TUSHARE_TOKEN'),
-            gemini_api_key=os.getenv('GEMINI_API_KEY'),
+            gemini_api_key=gemini_api_key,
+            gemini_api_keys=gemini_api_keys,
             gemini_model=os.getenv('GEMINI_MODEL', 'gemini-3-flash-preview'),
             gemini_model_fallback=os.getenv('GEMINI_MODEL_FALLBACK', 'gemini-2.5-flash'),
             gemini_temperature=float(os.getenv('GEMINI_TEMPERATURE', '0.7')),
             gemini_request_delay=float(os.getenv('GEMINI_REQUEST_DELAY', '2.0')),
             gemini_max_retries=int(os.getenv('GEMINI_MAX_RETRIES', '5')),
             gemini_retry_delay=float(os.getenv('GEMINI_RETRY_DELAY', '5.0')),
+            gemini_per_model_rpm=max(1, int(os.getenv('GEMINI_PER_MODEL_RPM', '5'))),
+            gemini_per_model_daily_limit=max(1, int(os.getenv('GEMINI_PER_MODEL_DAILY_LIMIT', '20'))),
             # LLM 缓存配置
             llm_cache_enabled=os.getenv('LLM_CACHE_ENABLED', 'true').lower() == 'true',
             llm_cache_ttl_hours=int(os.getenv('LLM_CACHE_TTL_HOURS', '24')),
@@ -494,6 +513,7 @@ class Config:
             openai_model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
             openai_vision_model=os.getenv('OPENAI_VISION_MODEL') or None,
             openai_temperature=float(os.getenv('OPENAI_TEMPERATURE', '0.7')),
+            llm_response_style=normalize_response_style(os.getenv('LLM_RESPONSE_STYLE', 'normal')),
             bocha_api_keys=bocha_api_keys,
             tavily_api_keys=tavily_api_keys,
             brave_api_keys=brave_api_keys,
@@ -565,6 +585,7 @@ class Config:
             https_proxy=os.getenv('HTTPS_PROXY'),
             schedule_enabled=os.getenv('SCHEDULE_ENABLED', 'false').lower() == 'true',
             schedule_time=os.getenv('SCHEDULE_TIME', '18:00'),
+            schedule_interval_minutes=max(0, int(os.getenv('SCHEDULE_INTERVAL_MINUTES', '0'))),
             schedule_run_immediately=os.getenv('SCHEDULE_RUN_IMMEDIATELY', 'true').lower() == 'true',
             run_immediately=os.getenv('RUN_IMMEDIATELY', 'true').lower() == 'true',
             market_review_enabled=os.getenv('MARKET_REVIEW_ENABLED', 'true').lower() == 'true',
@@ -817,9 +838,20 @@ class Config:
         if not self.tushare_token:
             warnings.append("提示：未配置 Tushare Token，将使用其他数据源")
         
-        if not self.gemini_api_key and not self.anthropic_api_key and not self.openai_api_key:
+        gemini_ready = bool(
+            (
+                self.gemini_api_key
+                and not self.gemini_api_key.startswith('your_')
+                and len(self.gemini_api_key) > 10
+            )
+            or any(
+                k and not k.startswith('your_') and len(k) > 10
+                for k in (self.gemini_api_keys or [])
+            )
+        )
+        if not gemini_ready and not self.anthropic_api_key and not self.openai_api_key:
             warnings.append("警告：未配置 Gemini/Anthropic/OpenAI API Key，AI 分析功能将不可用")
-        elif not self.gemini_api_key and not self.anthropic_api_key:
+        elif not gemini_ready and not self.anthropic_api_key:
             warnings.append("提示：未配置 Gemini/Anthropic API Key，将使用 OpenAI 兼容 API")
         
         if not self.bocha_api_keys and not self.tavily_api_keys and not self.brave_api_keys and not self.serpapi_keys:
@@ -842,9 +874,9 @@ class Config:
         return {
             "stocks": ["stock_list", "hk_stock_list", "us_stock_list"],
             "ai": [
-                "gemini_api_key", "gemini_model", "gemini_model_fallback", "gemini_temperature",
+                "gemini_api_key", "gemini_api_keys", "gemini_model", "gemini_model_fallback", "gemini_temperature", "gemini_per_model_rpm", "gemini_per_model_daily_limit",
                 "anthropic_api_key", "anthropic_model", "anthropic_temperature", "anthropic_max_tokens",
-                "openai_api_key", "openai_base_url", "openai_model", "openai_vision_model", "openai_temperature",
+                "openai_api_key", "openai_base_url", "openai_model", "openai_vision_model", "openai_temperature", "llm_response_style",
             ],
             "search": [
                 "bocha_api_keys",
@@ -874,7 +906,7 @@ class Config:
                 "backtest_min_age_days", "backtest_engine_version", "backtest_neutral_band_pct",
                 "log_dir", "log_level", "max_workers", "debug", "http_proxy", "https_proxy",
                 "historical_data_days", "trend_analysis_window", "max_historical_days",
-                "schedule_enabled", "schedule_time", "schedule_run_immediately", "run_immediately",
+                "schedule_enabled", "schedule_time", "schedule_interval_minutes", "schedule_run_immediately", "run_immediately",
                 "market_review_enabled", "market_review_region", "trading_day_check_enabled",
                 "enable_realtime_quote", "enable_realtime_technical_indicators", "enable_chip_distribution",
                 "enable_eastmoney_patch", "realtime_source_priority", "realtime_cache_ttl",

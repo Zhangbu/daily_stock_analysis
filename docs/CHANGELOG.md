@@ -8,6 +8,9 @@
 ## [Unreleased]
 
 ### 修复（#patch）
+- 定时任务新增间隔触发模式：支持 `SCHEDULE_INTERVAL_MINUTES`（分钟）配置；当该值 > 0 时按固定间隔执行并优先于 `SCHEDULE_TIME` 的每日定时模式。
+- Gemini 新增多 Key 配置 `GEMINI_API_KEYS`（逗号分隔），运行时在 `GeminiAnalyzer` 与 Agent `LLMToolAdapter` 链路遇到 429/quota/rate-limit 或 API Key 异常时会自动轮换到下一个 Key；`GEMINI_API_KEY` 继续兼容并会自动纳入 key 池。
+- Gemini 增加按模型本地配额控制：支持 `GEMINI_PER_MODEL_RPM`（默认 5）与 `GEMINI_PER_MODEL_DAILY_LIMIT`（默认 20）；到达每分钟限额时先本地等待，到达单模型日限额时自动切换到 `GEMINI_MODEL_FALLBACK`，两模型均耗尽后快速进入后备链路。
 - Telegram 推送新增独立 SSL 配置：支持 `TELEGRAM_CA_BUNDLE` 指定证书链，或用 `TELEGRAM_VERIFY_SSL=false` 在可信环境临时排障；遇到 `CERTIFICATE_VERIFY_FAILED` 时不再盲目重试 3 次，而是直接输出可操作提示。
 - `TushareFetcher` 初始化改为直接调用 `ts.pro_api(TOKEN)`，不再触发 SDK 将 token 写入 `~/tk.csv`；测试/只读沙箱环境下可避免无关的 `Read-only file system` 噪音日志。
 - 股票池配置拆分为三市场独立管理：`STOCK_LIST` 现在用于 A股，新增 `HK_STOCK_LIST` 管理港股，`US_STOCK_LIST` 管理美股；运行时分析会自动合并三份股票池，并兼容旧配置里仍混放在 `STOCK_LIST` 的港股/美股代码。

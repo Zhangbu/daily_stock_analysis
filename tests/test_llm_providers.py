@@ -4,7 +4,7 @@
 import unittest
 from types import SimpleNamespace
 
-from src.llm.providers import build_openai_client_kwargs, init_openai_fallback
+from src.llm.providers import build_openai_client_kwargs, collect_gemini_api_keys, init_openai_fallback
 
 
 class _FakeOpenAI:
@@ -24,6 +24,17 @@ class LlmProvidersTestCase(unittest.TestCase):
         self.assertEqual(kwargs["api_key"], "sk-test-key")
         self.assertEqual(kwargs["base_url"], "https://aihubmix.com/v1")
         self.assertEqual(kwargs["default_headers"]["APP-Code"], "GPIJ3886")
+
+
+    def test_collect_gemini_api_keys_deduplicates_and_merges_legacy_key(self):
+        config = SimpleNamespace(
+            gemini_api_key="legacy-key-123456",
+            gemini_api_keys=["pool-key-abcdef", "legacy-key-123456", "your_placeholder"],
+        )
+
+        keys = collect_gemini_api_keys(config)
+
+        self.assertEqual(keys, ["pool-key-abcdef", "legacy-key-123456"])
 
     def test_init_openai_fallback_sets_client_and_flags(self):
         analyzer = SimpleNamespace(

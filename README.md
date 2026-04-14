@@ -91,14 +91,18 @@
 |------------|------|:----:|
 | `AIHUBMIX_KEY` | [AIHubMix](https://aihubmix.com/?aff=CfMq) API Key，一 Key 切换使用全系模型，免费模型可用 | 可选 |
 | `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/) 获取免费 Key（需科学上网） | 可选 |
+| `GEMINI_API_KEYS` | 多个 Gemini Key（逗号分隔），用于免费额度轮换与自动故障切换 | 可选 |
+| `GEMINI_PER_MODEL_RPM` | 每个 Gemini 模型每分钟限额（免费层建议 `5`） | 可选 |
+| `GEMINI_PER_MODEL_DAILY_LIMIT` | 每个 Gemini 模型每天限额（免费层建议 `20`） | 可选 |
 | `ANTHROPIC_API_KEY` | [Anthropic Claude](https://console.anthropic.com/) API Key | 可选 |
 | `ANTHROPIC_MODEL` | Claude 模型（如 `claude-3-5-sonnet-20241022`） | 可选 |
 | `OPENAI_API_KEY` | OpenAI 兼容 API Key（支持 DeepSeek、通义千问等） | 可选 |
 | `OPENAI_BASE_URL` | OpenAI 兼容 API 地址（如 `https://api.deepseek.com/v1`） | 可选 |
 | `OPENAI_MODEL` | 模型名称（如 `gemini-3.1-pro-preview`、`gemini-3-flash-preview`、`gpt-5.2`） | 可选 |
+| `LLM_RESPONSE_STYLE` | LLM 文风压缩模式：`normal`/`caveman_lite`/`caveman_full`/`caveman_ultra`（仅压缩措辞，不改变输出结构） | 可选 |
 | `OPENAI_VISION_MODEL` | 图片识别专用模型（部分第三方模型不支持图像；不填则用 `OPENAI_MODEL`） | 可选 |
 
-> 注：AI 优先级 Gemini > Anthropic > OpenAI（含 AIHubmix），至少配置一个。`AIHUBMIX_KEY` 无需配置 `OPENAI_BASE_URL`，系统自动适配。图片识别需 Vision 能力模型。DeepSeek 思考模式（deepseek-reasoner、deepseek-r1、qwq、deepseek-chat）按模型名自动识别，无需额外配置。
+> 注：AI 优先级 Gemini > Anthropic > OpenAI（含 AIHubmix），至少配置一个。`AIHUBMIX_KEY` 无需配置 `OPENAI_BASE_URL`，系统自动适配。图片识别需 Vision 能力模型。DeepSeek 思考模式（deepseek-reasoner、deepseek-r1、qwq、deepseek-chat）按模型名自动识别，无需额外配置。 若配置 `GEMINI_API_KEYS`，系统会在 Gemini 出现限流/Key 异常时自动切换到下一个 Key。 在达到每模型 RPM/日限额时优先本地等待或切换到备选模型。
 
 <details>
 <summary><b>通知渠道配置</b>（点击展开，精简模式建议仅 Email / Telegram / Discord）</summary>
@@ -322,6 +326,11 @@ python main.py
 访问 `http://127.0.0.1:8000` 即可使用。
 
 > 也可以使用 `python main.py --serve` (等效命令)
+
+定时任务支持两种触发方式（通过 `.env` 配置）：
+- 每日固定时间：`SCHEDULE_ENABLED=true` + `SCHEDULE_TIME=18:00`
+- 固定间隔触发：`SCHEDULE_ENABLED=true` + `SCHEDULE_INTERVAL_MINUTES=30`（>0 时优先于 `SCHEDULE_TIME`）
+
 
 ## 🔗 OpenClaw 集成
 

@@ -615,6 +615,16 @@ class NotificationService:
             "",
         ]
 
+        def _safe_dict(value: Any) -> Dict[str, Any]:
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(_fix_json_string(value))
+                    return parsed if isinstance(parsed, dict) else {}
+                except (json.JSONDecodeError, TypeError):
+                    return {}
+            return {}
 
         # === 新增：分析结果摘要 (Issue #112) ===
         if results:
@@ -657,7 +667,7 @@ class NotificationService:
                 ])
                 
                 # ========== 舆情与基本面概览（放在最前面）==========
-                intel = dashboard.get('intelligence', {}) if dashboard else {}
+                intel = _safe_dict(dashboard.get('intelligence', {}) if dashboard else {})
                 if intel:
                     report_lines.extend([
                         "### 📰 重要信息速览",
@@ -690,10 +700,10 @@ class NotificationService:
                     report_lines.append("")
                 
                 # ========== 核心结论 ==========
-                core = dashboard.get('core_conclusion', {}) if dashboard else {}
+                core = _safe_dict(dashboard.get('core_conclusion', {}) if dashboard else {})
                 one_sentence = core.get('one_sentence', result.analysis_summary)
                 time_sense = core.get('time_sensitivity', '本周内')
-                pos_advice = core.get('position_advice', {})
+                pos_advice = _safe_dict(core.get('position_advice', {}))
                 
                 report_lines.extend([
                     "### 📌 核心结论",
@@ -718,7 +728,7 @@ class NotificationService:
                 self._append_market_snapshot(report_lines, result)
                 
                 # ========== 数据透视 ==========
-                data_persp = dashboard.get('data_perspective', {}) if dashboard else {}
+                data_persp = _safe_dict(dashboard.get('data_perspective', {}) if dashboard else {})
                 if data_persp:
                     # Handle string types in nested dicts
                     if isinstance(data_persp, str):
@@ -796,7 +806,7 @@ class NotificationService:
                         ])
                 
                 # ========== 作战计划 ==========
-                battle = dashboard.get('battle_plan', {}) if dashboard else {}
+                battle = _safe_dict(dashboard.get('battle_plan', {}) if dashboard else {})
                 if battle:
                     report_lines.extend([
                         "### 🎯 作战计划",

@@ -331,6 +331,30 @@ class TestSerializeToolResult(unittest.TestCase):
         self.assertEqual(parsed["name"], "test")
         self.assertEqual(parsed["value"], 42)
 
+    def test_serialize_long_string_is_truncated_for_budget(self):
+        long_text = "x" * 5000
+        result = self.executor._serialize_tool_result(long_text)
+        self.assertIn("[TRUNCATED_FOR_TOKEN_BUDGET]", result)
+        self.assertLess(len(result), 2000)
+
+    def test_serialize_news_tool_uses_stricter_budget(self):
+        long_text = "\n".join([f"line{i}:{'x' * 140}" for i in range(60)])
+        result = self.executor._serialize_tool_result(long_text, tool_name="search_stock_news")
+        self.assertIn("[TRUNCATED_FOR_TOKEN_BUDGET]", result)
+        self.assertLess(len(result), 1200)
+
+    def test_compact_history_messages_clip_long_content(self):
+        history = [
+            {"role": "user", "content": "x" * 800},
+            {"role": "assistant", "content": "ok"},
+        ]
+        compact = self.executor._compact_history_messages(history)
+        self.assertEqual(len(compact), 2)
+        self.assertTrue(compact[0]["content"].endswith("..."))
+        self.assertLessEqual(len(compact[0]["content"]), 320)
+        self.assertEqual(compact[1]["content"], "ok")
+        self.assertEqual(history[0]["content"], "x" * 800)
+
 
 # ============================================================
 # User message builder

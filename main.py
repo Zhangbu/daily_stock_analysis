@@ -774,7 +774,10 @@ def main() -> int:
         # 模式2: 定时任务模式
         if args.schedule or config.schedule_enabled:
             logger.info("模式: 定时任务")
-            logger.info(f"每日执行时间: {config.schedule_time}")
+            if config.schedule_interval_minutes > 0:
+                logger.info(f"执行模式: 每 {config.schedule_interval_minutes} 分钟触发")
+            else:
+                logger.info(f"执行模式: 每日 {config.schedule_time} 触发")
 
             # Determine whether to run immediately:
             # Command line arg --no-run-immediately overrides config if present.
@@ -793,6 +796,7 @@ def main() -> int:
             run_with_schedule(
                 task=scheduled_task,
                 schedule_time=config.schedule_time,
+                interval_minutes=config.schedule_interval_minutes,
                 run_immediately=should_run_immediately
             )
             return 0

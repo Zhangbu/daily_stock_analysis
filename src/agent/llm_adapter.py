@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from src.config import get_config
+from src.llm.providers import collect_gemini_api_keys
+from src.llm.gemini_quota import get_gemini_quota_controller
 from src.llm.retry_policy import (
     first_non_ascii_info as _first_non_ascii_info,
     is_ascii_encode_error as _is_ascii_encode_error,
@@ -187,6 +189,8 @@ class LLMToolAdapter:
 
         # Config
         self._config = config
+        self._gemini_api_keys = collect_gemini_api_keys(config)
+        self._gemini_key_index = 0
 
         # Initialize providers
         self._init_providers()
@@ -196,14 +200,18 @@ class LLMToolAdapter:
         config = self._config
 
         # Gemini
-        gemini_key = config.gemini_api_key
-        if gemini_key and not gemini_key.startswith("your_") and len(gemini_key) > 10:
+        if self._gemini_api_keys:
             try:
                 from google import genai as google_genai
-                self._gemini_client = google_genai.Client(api_key=gemini_key)
+                self._gemini_client = google_genai.Client(api_key=self._gemini_api_keys[self._gemini_key_index])
                 self._gemini_available = True
                 model_name = config.gemini_model or "gemini-2.5-flash"
-                logger.info(f"Agent LLM: Gemini initialized (model={model_name})")
+                logger.info(
+                    "Agent LLM: Gemini initialized (model=%s, key=%d/%d)",
+                    model_name,
+                    self._gemini_key_index + 1,
+                    len(self._gemini_api_keys),
+                )
             except Exception as e:
                 logger.warning(f"Agent LLM: Gemini init failed: {e}")
 
@@ -235,6 +243,74 @@ class LLMToolAdapter:
                 logger.info("Agent LLM: OpenAI initialized")
             except Exception as e:
                 logger.warning(f"Agent LLM: OpenAI init failed: {e}")
+
+    def _is_gemini_retryable_key_error(self, error: Exception) -> bool:
+        """Whether Gemini error should trigger API key rotation."""
+        text = str(error).lower()
+        return (
+            "429" in text
+            or "quota" in text
+            or "rate" in text
+            or (
+                "api key" in text
+                and (
+                    "invalid" in text
+                    or "expired" in text
+                    or "permission" in text
+                    or "unauthorized" in text
+                    or "403" in text
+                )
+            )
+        )
+
+    def _switch_gemini_api_key(self, reason: str = "") -> bool:
+        """Rotate Gemini client to next API key."""
+        if len(self._gemini_api_keys) <= 1:
+            return False
+        try:
+            from google import genai as google_genai
+        except Exception:
+            return False
+
+        total = len(self._gemini_api_keys)
+        original_index = self._gemini_key_index
+        for step in range(1, total):
+            next_index = (original_index + step) % total
+            try:
+                self._gemini_client = google_genai.Client(api_key=self._gemini_api_keys[next_index])
+                self._gemini_key_index = next_index
+                self._gemini_available = True
+                suffix = f" due to {reason}" if reason else ""
+                logger.warning("Agent LLM: switched Gemini API key %d/%d%s", next_index + 1, total, suffix)
+                return True
+            except Exception as exc:
+                logger.warning("Agent LLM: Gemini key switch failed: %s", exc)
+                continue
+
+        self._gemini_key_index = original_index
+        return False
+
+    def _acquire_gemini_quota_slot(self, model_name: str) -> str:
+        """Acquire slot for Gemini model quota.
+
+        Returns: ok / wait / daily
+        """
+        decision = get_gemini_quota_controller().acquire(
+            model_name=model_name,
+            per_minute=getattr(self._config, "gemini_per_model_rpm", 5),
+            daily_limit=getattr(self._config, "gemini_per_model_daily_limit", 20),
+        )
+        if decision.acquired:
+            return "ok"
+        if decision.reason == "rpm":
+            logger.info(
+                "Agent LLM: Gemini model %s hit per-minute limit, waiting %.2fs",
+                model_name,
+                decision.wait_seconds,
+            )
+            time.sleep(decision.wait_seconds)
+            return "wait"
+        return "daily"
 
     @property
     def is_available(self) -> bool:
@@ -390,11 +466,48 @@ class LLMToolAdapter:
         if system_instruction:
             gen_config_kwargs["system_instruction"] = system_instruction
 
-        response = self._gemini_client.models.generate_content(
-            model=model_name,
-            contents=contents,
-            config=genai_types.GenerateContentConfig(**gen_config_kwargs),
-        )
+        model_candidates = []
+        for m in [config.gemini_model or "gemini-2.5-flash", config.gemini_model_fallback or ""]:
+            m = (m or "").strip()
+            if m and m not in model_candidates:
+                model_candidates.append(m)
+
+        last_error: Optional[Exception] = None
+        response = None
+        for active_model in model_candidates:
+            key_attempts = max(1, len(self._gemini_api_keys) if self._gemini_api_keys else 1)
+            for _ in range(key_attempts):
+                quota_status = self._acquire_gemini_quota_slot(active_model)
+                if quota_status == "wait":
+                    continue
+                if quota_status == "daily":
+                    logger.warning(
+                        "Agent LLM: Gemini model %s reached daily limit (%s/day), trying next model",
+                        active_model,
+                        getattr(self._config, "gemini_per_model_daily_limit", 20),
+                    )
+                    break
+
+                try:
+                    response = self._gemini_client.models.generate_content(
+                        model=active_model,
+                        contents=contents,
+                        config=genai_types.GenerateContentConfig(**gen_config_kwargs),
+                    )
+                    model_name = active_model
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if self._is_gemini_retryable_key_error(exc) and self._switch_gemini_api_key(reason="request failure"):
+                        continue
+                    raise
+            if response is not None:
+                break
+
+        if response is None and last_error is not None:
+            raise last_error
+        if response is None:
+            raise RuntimeError("Gemini quota exhausted for configured models")
 
         # Parse response
         tool_calls = []

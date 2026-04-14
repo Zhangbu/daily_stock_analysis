@@ -8,6 +8,7 @@ from unittest.mock import patch
 import requests
 
 from src.notification import NotificationService
+from src.analyzer import AnalysisResult
 from src.notification_renderers import render_daily_report
 from src.notification_transports import dispatch_notification_channel
 
@@ -46,6 +47,25 @@ class NotificationHelpersTestCase(unittest.TestCase):
 
         self.assertEqual(kwargs["timeout"], 10)
         self.assertEqual(kwargs["verify"], "/tmp/custom-ca.pem")
+
+
+    def test_generate_dashboard_report_tolerates_string_core_conclusion(self):
+        service = NotificationService.__new__(NotificationService)
+        service._report_summary_only = False
+
+        result = AnalysisResult(
+            code="600050",
+            name="中国联通",
+            sentiment_score=60,
+            trend_prediction="震荡",
+            operation_advice="观望",
+            analysis_summary="回落至支撑位附近，等待确认",
+        )
+        result.dashboard = {"core_conclusion": "not-a-dict"}
+
+        report = service._generate_dashboard_report_impl([result], report_date="2026-04-14")
+
+        self.assertIn("回落至支撑位附近，等待确认", report)
 
     def test_send_telegram_message_stops_retry_on_cert_verify_error(self):
         service = NotificationService.__new__(NotificationService)

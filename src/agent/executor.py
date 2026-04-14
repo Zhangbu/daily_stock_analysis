@@ -29,6 +29,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from json_repair import repair_json
 
 from src.agent.llm_adapter import LLMToolAdapter
+from src.config import get_config
+from src.llm.response_style import apply_response_style
 from src.agent.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,17 @@ TOOL_RETRY_MAX_DELAY: float = 5.0
 
 # Limit the amount of chat context sent back to the model each turn.
 _MAX_CHAT_HISTORY_MESSAGES: int = 6
+_MAX_HISTORY_MESSAGE_CHARS: int = 320
+# Hard budget for each tool result injected back into LLM context.
+_MAX_TOOL_RESULT_CHARS: int = 1800
+_MAX_TOOL_RESULT_LINES: int = 30
+_PER_TOOL_RESULT_BUDGETS: Dict[str, Tuple[int, int]] = {
+    "search_stock_news": (1000, 16),
+    "search_comprehensive_intel": (1000, 16),
+    "search_global_news": (1000, 16),
+    "search_web": (1000, 16),
+    "analyze_market_sentiment": (1200, 20),
+}
 
 # Tool name → short label used to build contextual thinking messages
 _THINKING_TOOL_LABELS: Dict[str, str] = {
@@ -236,6 +249,25 @@ class AgentExecutor:
         self.max_steps = max_steps
         self.use_cache = use_cache
         self.max_retries = max_retries
+        self._llm_response_style = get_config().llm_response_style
+
+    def _build_agent_system_prompt(self, skills_section: str) -> str:
+        """Build agent analysis prompt with optional runtime style modifier."""
+        base_prompt = AGENT_SYSTEM_PROMPT.format(skills_section=skills_section)
+        return apply_response_style(
+            prompt=base_prompt,
+            style=self._llm_response_style,
+            structured_json=True,
+        )
+
+    def _build_chat_system_prompt(self, skills_section: str) -> str:
+        """Build chat prompt with optional runtime style modifier."""
+        base_prompt = CHAT_SYSTEM_PROMPT.format(skills_section=skills_section)
+        return apply_response_style(
+            prompt=base_prompt,
+            style=self._llm_response_style,
+            structured_json=False,
+        )
 
     # ============================================================
     # Tool execution with retry and caching
@@ -407,7 +439,7 @@ class AgentExecutor:
         skills_section = ""
         if self.skill_instructions:
             skills_section = f"## 激活的交易策略\n\n{self.skill_instructions}"
-        system_prompt = AGENT_SYSTEM_PROMPT.format(skills_section=skills_section)
+        system_prompt = self._build_agent_system_prompt(skills_section)
 
         # Build tool declarations for all providers
         tool_decls = {
@@ -446,7 +478,7 @@ class AgentExecutor:
         skills_section = ""
         if self.skill_instructions:
             skills_section = f"## 激活的交易策略\n\n{self.skill_instructions}"
-        system_prompt = CHAT_SYSTEM_PROMPT.format(skills_section=skills_section)
+        system_prompt = self._build_chat_system_prompt(skills_section)
 
         # Build tool declarations for all providers
         tool_decls = {
@@ -457,7 +489,7 @@ class AgentExecutor:
 
         # Get conversation history
         session = conversation_manager.get_or_create(session_id)
-        history = session.get_history()[-_MAX_CHAT_HISTORY_MESSAGES:]
+        history = self._compact_history_messages(session.get_history()[-_MAX_CHAT_HISTORY_MESSAGES:])
 
         # Initialize conversation
         messages: List[Dict[str, Any]] = [
@@ -556,7 +588,7 @@ class AgentExecutor:
                     t0 = time.time()
                     try:
                         res = self.tool_registry.execute(tc_item.name, **tc_item.arguments)
-                        res_str = self._serialize_tool_result(res)
+                        res_str = self._serialize_tool_result(res, tool_name=tc_item.name)
                         ok = True
                     except Exception as e:
                         res_str = json.dumps({"error": str(e)})
@@ -719,25 +751,60 @@ class AgentExecutor:
             fields.append(f"{label}{value}{suffix}")
         return "，".join(fields)
 
-    def _serialize_tool_result(self, result: Any) -> str:
-        """Serialize a tool result to a JSON string for the LLM."""
+    def _compact_tool_result_text(self, text: str, tool_name: Optional[str] = None) -> str:
+        """Clamp tool-result size to reduce prompt token usage."""
+        if not text:
+            return text
+
+        max_chars = _MAX_TOOL_RESULT_CHARS
+        max_lines = _MAX_TOOL_RESULT_LINES
+        if tool_name and tool_name in _PER_TOOL_RESULT_BUDGETS:
+            max_chars, max_lines = _PER_TOOL_RESULT_BUDGETS[tool_name]
+
+        compact_lines = [line.rstrip() for line in str(text).splitlines() if line.strip()]
+        if len(compact_lines) > max_lines:
+            compact_lines = compact_lines[:max_lines]
+        compact = "\n".join(compact_lines)
+        if len(compact) > max_chars:
+            compact = compact[: max_chars - 3] + "..."
+
+        if compact != text:
+            compact += "\n[TRUNCATED_FOR_TOKEN_BUDGET]"
+        return compact
+
+    def _compact_history_messages(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Clip each history message content to a small budget."""
+        compact_history: List[Dict[str, Any]] = []
+        for item in history:
+            msg = dict(item)
+            content = msg.get("content")
+            if isinstance(content, str) and len(content) > _MAX_HISTORY_MESSAGE_CHARS:
+                msg["content"] = content[: _MAX_HISTORY_MESSAGE_CHARS - 3] + "..."
+            compact_history.append(msg)
+        return compact_history
+
+    def _serialize_tool_result(self, result: Any, tool_name: Optional[str] = None) -> str:
+        """Serialize a tool result to a compact JSON string for the LLM."""
         if result is None:
-            return json.dumps({"result": None})
-        if isinstance(result, str):
-            return result
-        if isinstance(result, (dict, list)):
+            serialized = json.dumps({"result": None})
+        elif isinstance(result, str):
+            serialized = result
+        elif isinstance(result, (dict, list)):
             try:
-                return json.dumps(result, ensure_ascii=False, default=str)
+                serialized = json.dumps(result, ensure_ascii=False, default=str)
             except (TypeError, ValueError):
-                return str(result)
+                serialized = str(result)
         # Dataclass or object with __dict__
-        if hasattr(result, '__dict__'):
+        elif hasattr(result, '__dict__'):
             try:
                 d = {k: v for k, v in result.__dict__.items() if not k.startswith('_')}
-                return json.dumps(d, ensure_ascii=False, default=str)
+                serialized = json.dumps(d, ensure_ascii=False, default=str)
             except (TypeError, ValueError):
-                return str(result)
-        return str(result)
+                serialized = str(result)
+        else:
+            serialized = str(result)
+
+        return self._compact_tool_result_text(serialized, tool_name=tool_name)
 
     def _parse_dashboard(self, content: str) -> Optional[Dict[str, Any]]:
         """Extract and parse the Decision Dashboard JSON from agent response."""
@@ -831,7 +898,7 @@ class AgentExecutor:
         skills_section = ""
         if self.skill_instructions:
             skills_section = f"## 激活的交易策略\n\n{self.skill_instructions}"
-        system_prompt = AGENT_SYSTEM_PROMPT.format(skills_section=skills_section)
+        system_prompt = self._build_agent_system_prompt(skills_section)
 
         # Build tool declarations for all providers
         tool_decls = {
@@ -889,7 +956,7 @@ class AgentExecutor:
         skills_section = ""
         if self.skill_instructions:
             skills_section = f"## 激活的交易策略\n\n{self.skill_instructions}"
-        system_prompt = CHAT_SYSTEM_PROMPT.format(skills_section=skills_section)
+        system_prompt = self._build_chat_system_prompt(skills_section)
 
         # Build tool declarations for all providers
         tool_decls = {
@@ -900,7 +967,7 @@ class AgentExecutor:
 
         # Get conversation history
         session = conversation_manager.get_or_create(session_id)
-        history = session.get_history()[-_MAX_CHAT_HISTORY_MESSAGES:]
+        history = self._compact_history_messages(session.get_history()[-_MAX_CHAT_HISTORY_MESSAGES:])
 
         # Initialize conversation
         messages: List[Dict[str, Any]] = [
@@ -1023,7 +1090,7 @@ class AgentExecutor:
                     )
 
                     duration = time.time() - t0
-                    res_str = self._serialize_tool_result(result)
+                    res_str = self._serialize_tool_result(result, tool_name=tc_item.name)
 
                     if progress_callback:
                         progress_callback({

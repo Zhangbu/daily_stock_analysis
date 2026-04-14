@@ -4,9 +4,33 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _is_valid_gemini_key(key: Optional[str]) -> bool:
+    """Check whether a Gemini API key looks usable."""
+    return bool(key and not key.startswith("your_") and len(key) > 10)
+
+
+def collect_gemini_api_keys(config, primary_key: Optional[str] = None) -> List[str]:
+    """Build a de-duplicated Gemini API key pool from config and optional primary key."""
+    keys: List[str] = []
+
+    def _push(candidate: Optional[str]) -> None:
+        if not _is_valid_gemini_key(candidate):
+            return
+        value = candidate.strip()
+        if value and value not in keys:
+            keys.append(value)
+
+    _push(primary_key)
+    for item in getattr(config, "gemini_api_keys", []) or []:
+        _push(item)
+    _push(getattr(config, "gemini_api_key", None))
+    return keys
+
 
 
 def build_openai_client_kwargs(config) -> Dict[str, Any]:

@@ -19,6 +19,7 @@ from typing import Optional, Dict, Any, List
 from src.agent.llm_adapter import get_thinking_extra_body
 from src.config import get_config
 from src.llm.providers import (
+    collect_gemini_api_keys,
     init_anthropic_fallback,
     init_gemini_model,
     init_openai_fallback,
@@ -32,6 +33,8 @@ from src.llm.retry_policy import (
 )
 from src.llm.result_parser import fix_json_string, parse_response, parse_text_response
 from src.llm.response_cache import get_llm_cache, LLMResponseCache
+from src.llm.response_style import apply_response_style
+from src.llm.gemini_quota import get_gemini_quota_controller
 
 logger = logging.getLogger(__name__)
 
@@ -507,8 +510,11 @@ dashboard 结构必须包含：
             api_key: Gemini API Key（可选，默认从配置读取）
         """
         config = get_config()
-        self._api_key = api_key or config.gemini_api_key
+        self._gemini_api_keys = collect_gemini_api_keys(config, primary_key=api_key)
+        self._gemini_key_index = 0
+        self._api_key = self._gemini_api_keys[0] if self._gemini_api_keys else None
         self._model = None
+        self._llm_response_style = config.llm_response_style
         self._current_model_name = None  # 当前使用的模型名称
         self._using_fallback = False  # 是否正在使用备选模型
         self._use_openai = False  # 是否使用 OpenAI 兼容 API
@@ -517,7 +523,7 @@ dashboard 结构必须包含：
         self._anthropic_client = None  # Anthropic 客户端
 
         # 检查 Gemini API Key 是否有效（过滤占位符）
-        gemini_key_valid = self._api_key and not self._api_key.startswith('your_') and len(self._api_key) > 10
+        gemini_key_valid = bool(self._gemini_api_keys)
 
         # 优先级：Gemini > Anthropic > OpenAI
         if gemini_key_valid:
@@ -577,6 +583,90 @@ dashboard 结构必须包含：
         """
         return switch_to_gemini_fallback_model(self, get_config())
 
+    def _is_gemini_key_error(self, error: Exception) -> bool:
+        """Return True when Gemini error suggests API key auth issues."""
+        text = str(error).lower()
+        return (
+            "api key" in text
+            and (
+                "invalid" in text
+                or "expired" in text
+                or "permission" in text
+                or "unauthorized" in text
+                or "403" in text
+            )
+        )
+
+    def _switch_gemini_api_key(self, reason: str = "") -> bool:
+        """Rotate to next Gemini API key and reinitialize model."""
+        if len(self._gemini_api_keys) <= 1:
+            return False
+
+        total = len(self._gemini_api_keys)
+        original_index = self._gemini_key_index
+        for step in range(1, total):
+            next_index = (original_index + step) % total
+            self._gemini_key_index = next_index
+            self._api_key = self._gemini_api_keys[next_index]
+            try:
+                self._init_model()
+            except Exception as exc:
+                logger.warning("[Gemini] API key switch init failed: %s", exc)
+                continue
+
+            if self._model is not None:
+                suffix = " due to " + reason if reason else ""
+                logger.warning("[Gemini] Switched API key %s/%s%s", next_index + 1, total, suffix)
+                return True
+
+        self._gemini_key_index = original_index
+        self._api_key = self._gemini_api_keys[original_index]
+        return False
+
+    def _acquire_gemini_quota_slot(self, config) -> str:
+        """Acquire Gemini quota slot for current model.
+
+        Returns:
+            "ok": slot acquired
+            "wait": minute quota reached, caller should sleep and retry
+            "switch": current model daily quota exhausted, try model switch
+            "exhausted": no available Gemini model quota
+        """
+        model_name = (self._current_model_name or "").strip()
+        if not model_name:
+            return "ok"
+
+        limiter = get_gemini_quota_controller()
+        decision = limiter.acquire(
+            model_name=model_name,
+            per_minute=getattr(config, "gemini_per_model_rpm", 5),
+            daily_limit=getattr(config, "gemini_per_model_daily_limit", 20),
+        )
+        if decision.acquired:
+            return "ok"
+
+        if decision.reason == "rpm":
+            logger.info(
+                "[Gemini] Model %s reached per-minute limit, waiting %.2fs",
+                model_name,
+                decision.wait_seconds,
+            )
+            time.sleep(decision.wait_seconds)
+            return "wait"
+
+        if decision.reason == "daily":
+            logger.warning(
+                "[Gemini] Model %s reached daily limit (%s/day)",
+                model_name,
+                getattr(config, "gemini_per_model_daily_limit", 20),
+            )
+            fallback_model = (config.gemini_model_fallback or "").strip()
+            if fallback_model and fallback_model != model_name and self._switch_to_fallback_model():
+                return "switch"
+            return "exhausted"
+
+        return "ok"
+
     def is_available(self) -> bool:
         """检查分析器是否可用。"""
         return (
@@ -618,7 +708,7 @@ dashboard 结构必须包含：
                 message = self._anthropic_client.messages.create(
                     model=self._current_model_name,
                     max_tokens=max_tokens,
-                    system=self.SYSTEM_PROMPT,
+                    system=self._styled_system_prompt(),
                     messages=[{"role": "user", "content": prompt}],
                     temperature=temperature,
                 )
@@ -670,7 +760,7 @@ dashboard 结构必须包含：
         config = get_config()
         max_retries = config.gemini_max_retries
         base_delay = config.gemini_retry_delay
-        system_prompt_for_openai = self.SYSTEM_PROMPT
+        system_prompt_for_openai = self._styled_system_prompt()
         prompt_for_openai = prompt
 
         def _build_base_request_kwargs(system_prompt_text: str, user_prompt_text: str) -> dict:
@@ -871,6 +961,15 @@ dashboard 结构必须包含：
                     logger.info(f"[Gemini] 第 {attempt + 1} 次重试，等待 {delay:.1f} 秒...")
                     time.sleep(delay)
                 
+                quota_status = self._acquire_gemini_quota_slot(config)
+                if quota_status == "wait":
+                    continue
+                if quota_status == "switch":
+                    tried_fallback = getattr(self, "_using_fallback", False)
+                    continue
+                if quota_status == "exhausted":
+                    raise RuntimeError("Gemini daily quota exhausted for configured models")
+
                 response = self._model.generate_content(
                     prompt,
                     generation_config=generation_config,
@@ -884,20 +983,36 @@ dashboard 结构必须包含：
                     
             except Exception as e:
                 last_error = e
-                if _is_non_retryable_llm_error(e):
+                error_str = str(e)
+                lower_error = error_str.lower()
+                is_rate_limit = "429" in error_str or "quota" in lower_error or "rate" in lower_error
+                is_key_error = self._is_gemini_key_error(e)
+                is_local_quota_exhausted = "daily quota exhausted for configured models" in lower_error
+
+                if is_local_quota_exhausted:
+                    logger.warning("[Gemini] Local model quotas exhausted, switching to provider fallback")
+                    break
+
+                if _is_non_retryable_llm_error(e) and not is_key_error:
                     logger.error(
                         "[Gemini] 检测到不可恢复错误，停止 Gemini 重试并进入后备链路: %s",
                         _clip_text(_safe_exception_text(e), 160),
                     )
                     break
-                error_str = str(e)
-                
-                # 检查是否是 429 限流错误
-                is_rate_limit = '429' in error_str or 'quota' in error_str.lower() or 'rate' in error_str.lower()
-                
+
+                if is_key_error:
+                    logger.warning("[Gemini] 检测到 API Key 异常，尝试切换 Key: %s", error_str[:100])
+                    if self._switch_gemini_api_key(reason="api key error"):
+                        tried_fallback = getattr(self, "_using_fallback", False)
+                        continue
+
                 if is_rate_limit:
                     logger.warning(f"[Gemini] API 限流 (429)，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
-                    
+
+                    if self._switch_gemini_api_key(reason="rate limit"):
+                        tried_fallback = getattr(self, "_using_fallback", False)
+                        continue
+
                     # 如果已经重试了一半次数且还没切换过备选模型，尝试切换
                     if attempt >= max_retries // 2 and not tried_fallback:
                         if self._switch_to_fallback_model():
@@ -1351,6 +1466,14 @@ dashboard 结构必须包含：
 请输出完整的 JSON 格式决策仪表盘。"""
         
         return prompt
+
+    def _styled_system_prompt(self) -> str:
+        """Return analyzer system prompt with optional runtime style modifier."""
+        return apply_response_style(
+            prompt=self.SYSTEM_PROMPT,
+            style=getattr(self, "_llm_response_style", "normal"),
+            structured_json=True,
+        )
 
     def _compact_prompt_items(self, items: Optional[List[str]]) -> List[str]:
         """Clip long bullet lists before they enter the LLM prompt."""
