@@ -29,6 +29,11 @@ SUPPORTED_MAG7_STRATEGIES = [
     "mag7_ma_cross",
 ]
 
+SUPPORTED_PROFILE_STRATEGIES = {
+    "mag7": SUPPORTED_MAG7_STRATEGIES,
+    "nasdaq100": SUPPORTED_MAG7_STRATEGIES,
+}
+
 
 @dataclass
 class ProfileStrategyResult:
@@ -58,8 +63,9 @@ class ProfileStrategyService:
 
     @staticmethod
     def get_available_strategy_names(profile_name: str) -> List[str]:
-        if profile_name == "mag7":
-            return list(SUPPORTED_MAG7_STRATEGIES)
+        strategies = SUPPORTED_PROFILE_STRATEGIES.get(profile_name)
+        if strategies is not None:
+            return list(strategies)
         raise ValueError(f"Unsupported profile: {profile_name}")
 
     def resolve_stock_codes(self, stocks_override: Optional[List[str]] = None) -> List[str]:

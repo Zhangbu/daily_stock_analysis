@@ -37,6 +37,7 @@ from api.v1.schemas.analysis import (
     Mag7SignalResponse,
     Mag7StrategyOption,
     Mag7TrendSnapshot,
+    ProfileStockItemResponse,
     TaskAccepted,
     BatchTaskAcceptedResponse,
     BatchTaskAcceptedItem,
@@ -60,6 +61,7 @@ from src.config import Config
 from src.report_language import get_localized_stock_name, normalize_report_language
 from src.services.name_to_code_resolver import resolve_name_to_code
 from src.services.stock_code_utils import is_code_like
+from src.services.profile_stock_metadata import build_profile_stock_items
 from src.services.profile_strategy_service import ProfileStrategyService
 from src.services.task_queue import (
     get_task_queue,
@@ -166,8 +168,32 @@ def _resolve_and_normalize_input(raw_value: str) -> str:
     description="返回美股七姐妹专用页面所需的股票池、默认策略和可选策略列表。",
 )
 def get_mag7_profile_meta() -> Mag7ProfileMetaResponse:
-    service = ProfileStrategyService(profile_name="mag7")
-    strategy_names = ProfileStrategyService.get_available_strategy_names("mag7")
+    return _build_profile_meta_response("mag7")
+
+
+@router.get(
+    "/profiles/{profile_name}/meta",
+    response_model=Mag7ProfileMetaResponse,
+    summary="获取策略画像元信息",
+    description="返回指定策略画像页面所需的股票池、默认策略和可选策略列表。",
+)
+def get_profile_meta(profile_name: str) -> Mag7ProfileMetaResponse:
+    return _build_profile_meta_response(profile_name)
+
+
+def _build_profile_meta_response(profile_name: str) -> Mag7ProfileMetaResponse:
+    try:
+        service = ProfileStrategyService(profile_name=profile_name)
+        strategy_names = ProfileStrategyService.get_available_strategy_names(profile_name)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "not_found",
+                "message": str(exc),
+                "detail": None,
+            },
+        ) from exc
     strategy_options = []
     from src.strategies import load_strategy_definition
 
@@ -187,6 +213,7 @@ def get_mag7_profile_meta() -> Mag7ProfileMetaResponse:
         description=service.profile.description,
         default_strategy=service.profile.default_strategy,
         stock_universe=service.profile.stock_universe,
+        stock_items=[ProfileStockItemResponse(**item) for item in build_profile_stock_items(service.profile.name, service.profile.stock_universe)],
         strategies=strategy_options,
     )
 
@@ -198,9 +225,23 @@ def get_mag7_profile_meta() -> Mag7ProfileMetaResponse:
     description="基于 yfinance 日K对美股七姐妹运行专用策略分析，返回同步结果。",
 )
 def run_mag7_strategy(request: Mag7RunRequest) -> Mag7RunResponse:
+    return _run_profile_strategy("mag7", request)
+
+
+@router.post(
+    "/profiles/{profile_name}/run",
+    response_model=Mag7RunResponse,
+    summary="运行指定策略画像分析",
+    description="基于 yfinance 日K对指定画像股票池运行专用策略分析，返回同步结果。",
+)
+def run_profile_strategy(profile_name: str, request: Mag7RunRequest) -> Mag7RunResponse:
+    return _run_profile_strategy(profile_name, request)
+
+
+def _run_profile_strategy(profile_name: str, request: Mag7RunRequest) -> Mag7RunResponse:
     try:
         selected_codes = [_resolve_and_normalize_input(code) for code in (request.stock_codes or [])]
-        service = ProfileStrategyService(profile_name="mag7", strategy_name=request.strategy_name)
+        service = ProfileStrategyService(profile_name=profile_name, strategy_name=request.strategy_name)
         results = service.run(stocks_override=selected_codes or None)
 
         return Mag7RunResponse(
@@ -210,20 +251,20 @@ def run_mag7_strategy(request: Mag7RunRequest) -> Mag7RunResponse:
             results=[_serialize_mag7_result(item) for item in results],
         )
     except DataFetchError as exc:
-        logger.warning("Mag7 strategy data fetch failed: %s", exc)
+        logger.warning("Profile strategy data fetch failed (%s): %s", profile_name, exc)
         raise HTTPException(
             status_code=502,
             detail={
                 "error": "data_fetch_failed",
-                "message": f"Mag7 数据获取失败：{exc}",
+                "message": f"{profile_name} 数据获取失败：{exc}",
                 "detail": None,
             },
         ) from exc
     except ValueError as exc:
         raise HTTPException(
-            status_code=400,
+            status_code=404 if "Unsupported profile" in str(exc) else 400,
             detail={
-                "error": "validation_error",
+                "error": "not_found" if "Unsupported profile" in str(exc) else "validation_error",
                 "message": str(exc),
                 "detail": None,
             },

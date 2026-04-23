@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] Web/API 新增 Mag7 专用入口：`/api/v1/analysis/mag7/meta`、`/api/v1/analysis/mag7/run` 与前端 `/mag7` 页面，支持在工作台内直接选择策略和股票池运行分析
 - [新功能] 新增 `mag7_ma_cross` 可执行策略，支持对美股七姐妹进行均线金叉/拐点分析，并已接入 CLI、Web 与 `/api/v1/analysis/mag7/run`
 - [改进] Mag7 页面新增三策略结果对比视图、趋势/信号状态徽标与最近一次分析/对比结果本地缓存，刷新页面后可直接恢复最近一次查看状态
+- [新功能] 新增 `nasdaq100` 策略画像与 Nasdaq-100 专用页面，复用现有美股日K策略页能力，支持同页运行、三策略对比与本地缓存恢复
+- [改进] Nasdaq-100 页面新增股票中文名/英文名/行业元数据展示，支持按关键词、行业和已选状态筛选股票池，提升大股票池场景下的选股效率
+- [改进] 策略画像页的股票池进一步支持按行业分组折叠展示，Profile 元数据中的股票名称与行业信息改由后端统一提供，减少前端静态配置重复
+- [修复] YfinanceFetcher 在美股日K链路中改为优先使用 Yahoo chart API，规避部分本地环境 `curl_cffi/OpenSSL` 导致的 `curl: (35) TLS connect error` 噪音与失败
 - [修复] 修复 Windows 桌面端转抄后端 stdout/stderr 时中文日志可能乱码的问题，统一优先使用 UTF-8 并兼容本地代码页回退
 - [改进] Docker 发布工作流收敛为更清晰的正式发布与手动补发链路，并统一官方 Docker Hub 镜像名为 `zhulinsen/daily_stock_analysis`
 - [文档] 补充官方镜像拉取、`docker run` 用法与 `.env` / 数据目录映射说明，不再仅覆盖 Compose 部署路径

@@ -121,6 +121,16 @@ class Mag7StrategyOption(BaseModel):
     description: str = Field(..., description="策略描述")
 
 
+class ProfileStockItemResponse(BaseModel):
+    """Per-stock metadata returned by a strategy profile."""
+
+    code: str = Field(..., description="股票代码")
+    name_en: str = Field(..., description="英文名")
+    name_zh: str = Field(..., description="中文名")
+    sector: str = Field(..., description="板块/行业大类")
+    industry: Optional[str] = Field(None, description="细分行业")
+
+
 class Mag7ProfileMetaResponse(BaseModel):
     """Mag7 profile metadata for the dedicated UI."""
 
@@ -129,6 +139,7 @@ class Mag7ProfileMetaResponse(BaseModel):
     description: str = Field(..., description="画像描述")
     default_strategy: str = Field(..., description="默认策略")
     stock_universe: List[str] = Field(default_factory=list, description="默认股票池")
+    stock_items: List[ProfileStockItemResponse] = Field(default_factory=list, description="股票元数据")
     strategies: List[Mag7StrategyOption] = Field(default_factory=list, description="可用策略列表")
 
 

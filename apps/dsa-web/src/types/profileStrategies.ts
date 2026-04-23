@@ -1,24 +1,33 @@
-export interface Mag7StrategyOption {
+export interface ProfileStrategyOption {
   name: string;
   displayName: string;
   description: string;
 }
 
-export interface Mag7ProfileMeta {
+export interface ProfileStockItem {
+  code: string;
+  nameEn: string;
+  nameZh: string;
+  sector: string;
+  industry?: string | null;
+}
+
+export interface ProfileMeta {
   profileName: string;
   displayName: string;
   description: string;
   defaultStrategy: string;
   stockUniverse: string[];
-  strategies: Mag7StrategyOption[];
+  stockItems: ProfileStockItem[];
+  strategies: ProfileStrategyOption[];
 }
 
-export interface Mag7RunRequest {
+export interface ProfileRunRequest {
   strategyName: string;
   stockCodes?: string[];
 }
 
-export interface Mag7TrendSnapshot {
+export interface ProfileTrendSnapshot {
   trendStatus: string;
   buySignal: string;
   ma5: number;
@@ -29,7 +38,7 @@ export interface Mag7TrendSnapshot {
   volumeRatio5d: number;
 }
 
-export interface Mag7Signal {
+export interface ProfileSignal {
   strategyName: string;
   score: number;
   grade: string;
@@ -43,17 +52,17 @@ export interface Mag7Signal {
   metrics: Record<string, number>;
 }
 
-export interface Mag7ResultItem {
+export interface ProfileResultItem {
   code: string;
   profileName: string;
   strategyName: string;
-  trend: Mag7TrendSnapshot;
-  signal: Mag7Signal;
+  trend: ProfileTrendSnapshot;
+  signal: ProfileSignal;
 }
 
-export interface Mag7RunResponse {
+export interface ProfileRunResponse {
   profileName: string;
   strategyName: string;
   stockCodes: string[];
-  results: Mag7ResultItem[];
+  results: ProfileResultItem[];
 }

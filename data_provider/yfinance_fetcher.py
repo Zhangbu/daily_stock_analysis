@@ -174,10 +174,17 @@ class YfinanceFetcher(BaseFetcher):
         2. 调用 yfinance API
         3. 处理返回数据
         """
-        import yfinance as yf
-
         # 转换代码格式
         yf_code = self._convert_stock_code(stock_code)
+
+        if is_us_stock_code(stock_code):
+            try:
+                logger.debug("Using Yahoo chart API as primary path for US daily K: %s", yf_code)
+                return self._fetch_chart_data_via_http(yf_code, stock_code, start_date, end_date)
+            except Exception as exc:
+                logger.debug("Yahoo chart API primary path failed for %s, falling back to yfinance: %s", stock_code, exc)
+
+        import yfinance as yf
 
         logger.debug(f"调用 yfinance.download({yf_code}, {start_date}, {end_date})")
 
