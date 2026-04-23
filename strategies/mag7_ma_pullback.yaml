@@ -1,0 +1,47 @@
+name: mag7_ma_pullback
+display_name: Mag7 均线回踩博弈
+description: 面向美股七姐妹的日K均线回踩策略，强调趋势过滤、缩量回踩和风险收益比。
+category: trend
+core_rules: [1, 2, 3, 4]
+required_tools:
+  - get_daily_history
+  - analyze_trend
+aliases: [mag7回踩, 七姐妹回踩, 美股七姐妹]
+default_priority: 15
+market_regimes: [trending_up, sideways]
+parameters:
+  ma_windows: [5, 10, 20, 60]
+  pullback_to_ma5_pct: 1.0
+  pullback_to_ma10_pct: 1.5
+  max_bias_ma5_pct: 3.5
+  volume_ratio_max: 0.9
+  breakout_lookback_days: 5
+  ma20_above_ma60_required: true
+  close_above_ma20_required: true
+  stop_loss_below_ma20_pct: 1.5
+  target_reward_risk: 2.0
+
+instructions: |
+  **Mag7 均线回踩博弈**
+
+  适用对象：
+  - 仅用于美股七姐妹日K分析。
+  - 默认股票池：AAPL、MSFT、NVDA、AMZN、GOOGL、META、TSLA。
+
+  核心判定：
+  1. 趋势过滤：
+     - 优先要求 MA5 >= MA10 >= MA20。
+     - MA20 高于 MA60，且收盘价位于 MA20 上方。
+  2. 回踩确认：
+     - 收盘价贴近 MA5（1% 内）或 MA10（1.5% 内）。
+     - 距离 MA5 过远时，不做追高介入。
+  3. 量能过滤：
+     - 回踩日成交量低于 5 日均量，优先识别缩量回踩。
+  4. 博弈思路：
+     - 价格贴近 MA5 时，优先看作强势整理后的继续进攻机会。
+     - 价格贴近 MA10 时，视作更深一层的均线防守博弈。
+     - 若跌破 MA20，则视为结构转弱，应降低评级。
+
+  输出重点：
+  - 给出评级（A/B/C/D）。
+  - 给出观察原因、风险提示、参考介入区、参考止损位与目标收益方向。

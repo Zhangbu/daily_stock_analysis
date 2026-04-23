@@ -1,0 +1,17 @@
+name: mag7
+display_name: Magnificent Seven
+description: Focused profile for the US Magnificent Seven daily-k strategy workflow.
+stock_universe:
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - GOOGL
+  - META
+  - TSLA
+data:
+  source: yfinance
+  interval: 1d
+  lookback_days: 250
+strategy:
+  default: mag7_ma_pullback

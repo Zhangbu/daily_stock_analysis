@@ -1,0 +1,42 @@
+name: mag7_ma_cross
+display_name: Mag7 均线拐点
+description: 面向美股七姐妹的日K均线交叉策略，强调短期均线上穿、中期趋势背景和量能确认。
+category: trend
+core_rules: [1, 2, 3, 6]
+required_tools:
+  - get_daily_history
+  - analyze_trend
+aliases: [mag7金叉, 七姐妹均线拐点, ma交叉]
+default_priority: 22
+market_regimes: [trending_up, sideways]
+parameters:
+  cross_lookback_days: 3
+  max_bias_ma5_pct: 4.0
+  volume_ratio_min: 0.9
+  ma20_above_ma60_required: true
+  close_above_ma20_required: true
+  stop_loss_below_ma10_pct: 1.5
+  target_reward_risk: 2.0
+
+instructions: |
+  **Mag7 均线拐点**
+
+  适用对象：
+  - 仅用于美股七姐妹日K分析。
+  - 默认股票池：AAPL、MSFT、NVDA、AMZN、GOOGL、META、TSLA。
+
+  核心判定：
+  1. 趋势背景：
+     - MA20 高于 MA60，收盘价位于 MA20 上方。
+     - 优先选择 MA10 已经企稳、MA20 向上的票。
+  2. 金叉信号：
+     - 最近 1 到 3 个交易日内出现 MA5 上穿 MA10。
+     - 若 MA10 同时位于 MA20 上方，视作更稳的趋势拐点。
+  3. 位置要求：
+     - 当前价格不能离 MA5 太远，避免金叉后高位追涨。
+  4. 量能过滤：
+     - 金叉附近量能至少不能明显萎缩，最好高于 5 日均量。
+
+  输出重点：
+  - 给出评级（A/B/C/D）。
+  - 给出金叉是否新鲜、当前价格离均线是否过远、参考防守位和目标收益方向。

@@ -10,7 +10,7 @@
 3. 定义异步任务队列相关模型
 """
 
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -111,6 +111,84 @@ class AnalysisResultResponse(BaseModel):
                 "created_at": "2024-01-01T12:00:00"
             }
         }
+
+
+class Mag7StrategyOption(BaseModel):
+    """Available Mag7 strategy option."""
+
+    name: str = Field(..., description="策略内部标识")
+    display_name: str = Field(..., description="策略显示名称")
+    description: str = Field(..., description="策略描述")
+
+
+class Mag7ProfileMetaResponse(BaseModel):
+    """Mag7 profile metadata for the dedicated UI."""
+
+    profile_name: str = Field(..., description="画像名称")
+    display_name: str = Field(..., description="画像显示名称")
+    description: str = Field(..., description="画像描述")
+    default_strategy: str = Field(..., description="默认策略")
+    stock_universe: List[str] = Field(default_factory=list, description="默认股票池")
+    strategies: List[Mag7StrategyOption] = Field(default_factory=list, description="可用策略列表")
+
+
+class Mag7RunRequest(BaseModel):
+    """Dedicated request model for running Mag7 strategies."""
+
+    strategy_name: str = Field(..., description="策略名称", example="mag7_ma_pullback")
+    stock_codes: Optional[List[str]] = Field(
+        None,
+        description="可选：覆盖默认股票池，仅分析选择的股票",
+        example=["AAPL", "NVDA", "MSFT"],
+    )
+
+
+class Mag7SignalResponse(BaseModel):
+    """Executable strategy signal summary."""
+
+    strategy_name: str = Field(..., description="策略名称")
+    score: int = Field(..., description="评分", ge=0, le=100)
+    grade: str = Field(..., description="评级，例如 A/B/C/D")
+    passed: bool = Field(..., description="是否通过策略阈值")
+    verdict: str = Field(..., description="结论")
+    entry_zone: str = Field(..., description="参考介入区")
+    stop_loss: str = Field(..., description="参考止损位")
+    target_hint: str = Field(..., description="参考目标提示")
+    reasons: List[str] = Field(default_factory=list, description="理由")
+    risks: List[str] = Field(default_factory=list, description="风险")
+    metrics: Dict[str, float] = Field(default_factory=dict, description="指标快照")
+
+
+class Mag7TrendSnapshot(BaseModel):
+    """Trend snapshot used by the Mag7 UI."""
+
+    trend_status: str = Field(..., description="趋势状态")
+    buy_signal: str = Field(..., description="技术分析买卖信号")
+    ma5: float = Field(..., description="MA5")
+    ma10: float = Field(..., description="MA10")
+    ma20: float = Field(..., description="MA20")
+    ma60: float = Field(..., description="MA60")
+    bias_ma5: float = Field(..., description="相对 MA5 乖离率")
+    volume_ratio_5d: float = Field(..., description="5 日量能比")
+
+
+class Mag7ResultItem(BaseModel):
+    """Per-stock result in the dedicated Mag7 run response."""
+
+    code: str = Field(..., description="股票代码")
+    profile_name: str = Field(..., description="画像名称")
+    strategy_name: str = Field(..., description="策略名称")
+    trend: Mag7TrendSnapshot = Field(..., description="趋势快照")
+    signal: Mag7SignalResponse = Field(..., description="策略结果")
+
+
+class Mag7RunResponse(BaseModel):
+    """Dedicated synchronous Mag7 run response."""
+
+    profile_name: str = Field(..., description="画像名称")
+    strategy_name: str = Field(..., description="策略名称")
+    stock_codes: List[str] = Field(default_factory=list, description="本次分析股票池")
+    results: List[Mag7ResultItem] = Field(default_factory=list, description="分析结果")
 
 
 class TaskAccepted(BaseModel):

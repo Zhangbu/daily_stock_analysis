@@ -1,0 +1,45 @@
+name: mag7_breakout
+display_name: Mag7 趋势突破
+description: 面向美股七姐妹的日K突破策略，强调平台上沿突破、量能放大与趋势延续。
+category: trend
+core_rules: [1, 2, 3, 6]
+required_tools:
+  - get_daily_history
+  - analyze_trend
+aliases: [mag7突破, 七姐妹突破, 趋势突破]
+default_priority: 18
+market_regimes: [trending_up, sideways]
+parameters:
+  breakout_lookback_days: 20
+  breakout_buffer_pct: 0.5
+  max_breakout_extension_pct: 4.0
+  volume_ratio_min: 1.2
+  ma20_above_ma60_required: true
+  close_above_ma20_required: true
+  stop_loss_below_breakout_pct: 2.0
+  target_reward_risk: 2.5
+
+instructions: |
+  **Mag7 趋势突破**
+
+  适用对象：
+  - 仅用于美股七姐妹日K分析。
+  - 默认股票池：AAPL、MSFT、NVDA、AMZN、GOOGL、META、TSLA。
+
+  核心判定：
+  1. 趋势背景：
+     - MA20 高于 MA60。
+     - 收盘价位于 MA20 上方。
+     - 优先选择 MA5 >= MA10 >= MA20 的票。
+  2. 突破确认：
+     - 当前价格突破最近 20 个交易日高点附近的平台上沿。
+     - 为避免假信号，可要求突破幅度至少高于平台高点 0.5%。
+  3. 量能确认：
+     - 突破日成交量高于 5 日均量，至少达到 1.2 倍。
+  4. 风险控制：
+     - 如果突破后离平台过远，则不追高。
+     - 若回落跌破突破位，应快速降低评级。
+
+  输出重点：
+  - 给出评级（A/B/C/D）。
+  - 给出突破位、参考防守位、目标收益方向。

@@ -48,6 +48,7 @@
 | 回测 | AI 回测验证 | 自动评估历史分析准确率，支持按股票与分析日期查看“AI 预测 vs 次日实际（1 日窗口）”和准确率 |
 | 资讯 | 公司公告 + 资金流 | IntelAgent 新增公告抓取与主力资金流维度（上交所/深交所/cninfo + A 股主力资金流）用于补强舆情链路 |
 | **Agent 问股** | **策略对话** | **多轮策略问答，支持均线金叉/缠论/波浪等 11 种内置策略，Web/Bot/API 全链路** |
+| 策略画像 | Profile Strategy 模式 | 新增 `--profile` / `--strategy` 入口，可将固定股票池与特定技术策略绑定运行，例如美股七姐妹 + 日K 均线回踩 |
 | 推送 | 多渠道通知 | 企业微信、飞书、Telegram、Discord、Slack、钉钉、邮件、Pushover |
 | 自动化 | 定时运行 | GitHub Actions 定时执行，无需服务器 |
 
@@ -88,6 +89,32 @@
 | 新闻时效 | 可配置新闻最大时效（默认 3 天），避免使用过时信息 |
 
 ## 🚀 快速开始
+
+### CLI 策略画像模式
+
+如果你希望在现有项目内只跑一组固定股票池 + 一套明确策略，可以直接使用新的 profile 模式。
+
+```bash
+python main.py --profile mag7
+python main.py --profile mag7 --strategy mag7_ma_pullback
+python main.py --profile mag7 --strategy mag7_breakout
+python main.py --profile mag7 --strategy mag7_ma_cross
+python main.py --profile mag7 --stocks AAPL,NVDA,MSFT
+```
+
+当前内置了一个面向美股七姐妹的 `mag7` profile：
+
+- 数据源固定为 `yfinance`
+- 周期固定为日 K
+- 默认策略为 `mag7_ma_pullback`
+- 当前可选策略包括 `mag7_ma_pullback`、`mag7_breakout`、`mag7_ma_cross`
+- 默认股票池为 `AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA`
+
+如果你启用了 Web 工作台，现在也可以直接在左侧导航进入 `Mag7` 页面：
+
+- 选择 `mag7_ma_pullback`、`mag7_breakout` 或 `mag7_ma_cross`
+- 勾选要分析的七姐妹股票
+- 直接查看评级、入场区、止损位和目标提示
 
 ### 方式一：GitHub Actions（推荐）
 

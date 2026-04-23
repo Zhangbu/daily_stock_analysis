@@ -238,6 +238,20 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        '--profile',
+        type=str,
+        default=None,
+        help='使用指定策略画像运行精简分析，例如 mag7'
+    )
+
+    parser.add_argument(
+        '--strategy',
+        type=str,
+        default=None,
+        help='与 --profile 配合使用，指定要执行的策略，例如 mag7_ma_pullback'
+    )
+
+    parser.add_argument(
         '--no-notify',
         action='store_true',
         help='不发送推送通知'
@@ -817,6 +831,19 @@ def main() -> int:
                 f"回测完成: processed={stats.get('processed')} saved={stats.get('saved')} "
                 f"completed={stats.get('completed')} insufficient={stats.get('insufficient')} errors={stats.get('errors')}"
             )
+            return 0
+
+        # 模式0.5: 策略画像运行
+        if getattr(args, 'profile', None):
+            logger.info("模式: 策略画像分析")
+            from src.services.profile_strategy_service import ProfileStrategyService
+
+            service = ProfileStrategyService(
+                profile_name=args.profile,
+                strategy_name=getattr(args, 'strategy', None),
+            )
+            results = service.run(stocks_override=stock_codes)
+            logger.info("\n%s", service.format_report(results))
             return 0
 
         # 模式1: 仅大盘复盘

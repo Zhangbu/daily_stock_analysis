@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [新功能] 新增 `--profile` / `--strategy` CLI 入口，并内置 `mag7` 股票池与 `mag7_ma_pullback` 可执行策略，支持基于 yfinance 日K对美股七姐妹执行均线回踩博弈分析
+- [新功能] 新增 `mag7_breakout` 可执行策略，支持对美股七姐妹进行平台突破与量能确认分析，并可通过 `python main.py --profile mag7 --strategy mag7_breakout` 直接运行
+- [新功能] Web/API 新增 Mag7 专用入口：`/api/v1/analysis/mag7/meta`、`/api/v1/analysis/mag7/run` 与前端 `/mag7` 页面，支持在工作台内直接选择策略和股票池运行分析
+- [新功能] 新增 `mag7_ma_cross` 可执行策略，支持对美股七姐妹进行均线金叉/拐点分析，并已接入 CLI、Web 与 `/api/v1/analysis/mag7/run`
+- [改进] Mag7 页面新增三策略结果对比视图、趋势/信号状态徽标与最近一次分析/对比结果本地缓存，刷新页面后可直接恢复最近一次查看状态
 - [修复] 修复 Windows 桌面端转抄后端 stdout/stderr 时中文日志可能乱码的问题，统一优先使用 UTF-8 并兼容本地代码页回退
 - [改进] Docker 发布工作流收敛为更清晰的正式发布与手动补发链路，并统一官方 Docker Hub 镜像名为 `zhulinsen/daily_stock_analysis`
 - [文档] 补充官方镜像拉取、`docker run` 用法与 `.env` / 数据目录映射说明，不再仅覆盖 Compose 部署路径

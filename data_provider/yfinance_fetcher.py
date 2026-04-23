@@ -15,14 +15,16 @@ YfinanceFetcher - 兜底数据源 (Priority 4)
 """
 
 import csv
+import contextlib
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import StringIO
 from typing import Optional, List, Dict, Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import pandas as pd
+import requests
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -51,6 +53,11 @@ except (ImportError, ModuleNotFoundError):
 import os
 
 logger = logging.getLogger(__name__)
+
+_YAHOO_CHART_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; DSA/1.0; +https://github.com/ZhuLinsen/daily_stock_analysis)",
+    "Accept": "application/json,text/plain,*/*",
+}
 
 
 class YfinanceFetcher(BaseFetcher):
@@ -175,14 +182,11 @@ class YfinanceFetcher(BaseFetcher):
         logger.debug(f"调用 yfinance.download({yf_code}, {start_date}, {end_date})")
 
         try:
-            # 使用 yfinance 下载数据
-            df = yf.download(
-                tickers=yf_code,
-                start=start_date,
-                end=end_date,
-                progress=False,  # 禁止进度条
-                auto_adjust=True,  # 自动调整价格（复权）
-                multi_level_index=True
+            df = self._download_via_yfinance(
+                yf=yf,
+                yf_code=yf_code,
+                start_date=start_date,
+                end_date=end_date,
             )
 
             # 筛选出 yf_code 的列, 避免多只股票数据混淆
@@ -193,14 +197,132 @@ class YfinanceFetcher(BaseFetcher):
                     df = df.loc[:, mask].copy()
 
             if df.empty:
-                raise DataFetchError(f"Yahoo Finance 未查询到 {stock_code} 的数据")
+                logger.debug("yfinance.download(%s) returned empty dataframe, trying chart API fallback", yf_code)
+                df = self._fetch_chart_data_via_http(yf_code, stock_code, start_date, end_date)
 
             return df
 
         except Exception as e:
+            logger.debug("yfinance.download(%s) failed, trying chart API fallback: %s", yf_code, e)
+            try:
+                return self._fetch_chart_data_via_http(yf_code, stock_code, start_date, end_date)
+            except Exception as fallback_exc:
+                logger.warning("Yahoo chart API fallback failed for %s: %s", stock_code, fallback_exc)
+                e = fallback_exc
             if isinstance(e, DataFetchError):
                 raise
             raise DataFetchError(f"Yahoo Finance 获取数据失败: {e}") from e
+
+    def _download_via_yfinance(self, yf, yf_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Execute yfinance.download() while suppressing noisy stderr/stdout output.
+
+        yfinance may emit transport-layer curl errors directly to stderr before
+        returning an empty DataFrame. We capture that output so the fallback path
+        can recover quietly, while still preserving the details in debug logs.
+        """
+        stdout_buffer = StringIO()
+        stderr_buffer = StringIO()
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            df = yf.download(
+                tickers=yf_code,
+                start=start_date,
+                end=end_date,
+                progress=False,
+                auto_adjust=True,
+                multi_level_index=True,
+            )
+
+        captured_output = "\n".join(
+            part.strip()
+            for part in (stdout_buffer.getvalue(), stderr_buffer.getvalue())
+            if part and part.strip()
+        )
+        if captured_output:
+            logger.debug("yfinance.download(%s) emitted diagnostic output: %s", yf_code, captured_output)
+
+        return df
+
+    def _fetch_chart_data_via_http(
+        self,
+        yf_code: str,
+        stock_code: str,
+        start_date: str,
+        end_date: str,
+    ) -> pd.DataFrame:
+        """
+        Fallback path that calls Yahoo Finance chart API directly via requests.
+
+        This bypasses yfinance's curl_cffi transport, which can fail on some
+        local OpenSSL/libcurl combinations even when normal HTTPS requests work.
+        """
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+        period1 = int(start_dt.timestamp())
+        period2 = int(end_dt.timestamp())
+        url = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_code}"
+            f"?period1={period1}&period2={period2}&interval=1d&includePrePost=false&events=div%2Csplits"
+        )
+
+        response = requests.get(url, headers=_YAHOO_CHART_HEADERS, timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+
+        chart = payload.get("chart") or {}
+        error = chart.get("error")
+        if error:
+            raise DataFetchError(f"Yahoo chart API error: {error}")
+
+        result_list = chart.get("result") or []
+        if not result_list:
+            raise DataFetchError(f"Yahoo chart API 未查询到 {stock_code} 的数据")
+
+        result = result_list[0]
+        timestamps = result.get("timestamp") or []
+        indicators = result.get("indicators") or {}
+        quotes = indicators.get("quote") or []
+        if not timestamps or not quotes:
+            raise DataFetchError(f"Yahoo chart API 返回数据不完整: {stock_code}")
+
+        quote = quotes[0]
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
+        closes = quote.get("close") or []
+        volumes = quote.get("volume") or []
+
+        adjclose_items = indicators.get("adjclose") or []
+        adjcloses = adjclose_items[0].get("adjclose") if adjclose_items else None
+
+        rows = []
+        for idx, ts in enumerate(timestamps):
+            open_price = opens[idx] if idx < len(opens) else None
+            high_price = highs[idx] if idx < len(highs) else None
+            low_price = lows[idx] if idx < len(lows) else None
+            close_price = closes[idx] if idx < len(closes) else None
+            volume = volumes[idx] if idx < len(volumes) else None
+            if None in (open_price, high_price, low_price, close_price, volume):
+                continue
+
+            adjusted_close = adjcloses[idx] if adjcloses and idx < len(adjcloses) else close_price
+            adjust_ratio = (adjusted_close / close_price) if close_price else 1.0
+
+            rows.append(
+                {
+                    "Date": pd.to_datetime(ts, unit="s"),
+                    "Open": float(open_price) * adjust_ratio,
+                    "High": float(high_price) * adjust_ratio,
+                    "Low": float(low_price) * adjust_ratio,
+                    "Close": float(adjusted_close),
+                    "Volume": float(volume),
+                }
+            )
+
+        if not rows:
+            raise DataFetchError(f"Yahoo chart API 未返回有效 K 线: {stock_code}")
+
+        return pd.DataFrame(rows)
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """

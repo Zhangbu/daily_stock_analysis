@@ -30,6 +30,13 @@ from api.deps import get_config_dep
 from api.v1.schemas.analysis import (
     AnalyzeRequest,
     AnalysisResultResponse,
+    Mag7ProfileMetaResponse,
+    Mag7ResultItem,
+    Mag7RunRequest,
+    Mag7RunResponse,
+    Mag7SignalResponse,
+    Mag7StrategyOption,
+    Mag7TrendSnapshot,
     TaskAccepted,
     BatchTaskAcceptedResponse,
     BatchTaskAcceptedItem,
@@ -47,11 +54,13 @@ from api.v1.schemas.history import (
     ReportStrategy,
     ReportDetails,
 )
+from data_provider.base import DataFetchError
 from data_provider.base import canonical_stock_code, normalize_stock_code
 from src.config import Config
 from src.report_language import get_localized_stock_name, normalize_report_language
 from src.services.name_to_code_resolver import resolve_name_to_code
 from src.services.stock_code_utils import is_code_like
+from src.services.profile_strategy_service import ProfileStrategyService
 from src.services.task_queue import (
     get_task_queue,
     DuplicateTaskError,
@@ -69,6 +78,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _SUPPORTED_FREE_TEXT_RE = re.compile(r"^[A-Za-z0-9.*\-+\u3400-\u9fff\s]+$")
+
+
+def _serialize_mag7_result(item) -> Mag7ResultItem:
+    return Mag7ResultItem(
+        code=item.code,
+        profile_name=item.profile_name,
+        strategy_name=item.strategy_name,
+        trend=Mag7TrendSnapshot(
+            trend_status=item.trend.trend_status.value,
+            buy_signal=item.trend.buy_signal.value,
+            ma5=item.trend.ma5,
+            ma10=item.trend.ma10,
+            ma20=item.trend.ma20,
+            ma60=item.trend.ma60,
+            bias_ma5=item.trend.bias_ma5,
+            volume_ratio_5d=item.trend.volume_ratio_5d,
+        ),
+        signal=Mag7SignalResponse(
+            strategy_name=item.signal.strategy_name,
+            score=item.signal.score,
+            grade=item.signal.grade,
+            passed=item.signal.passed,
+            verdict=item.signal.verdict,
+            entry_zone=item.signal.entry_zone,
+            stop_loss=item.signal.stop_loss,
+            target_hint=item.signal.target_hint,
+            reasons=item.signal.reasons,
+            risks=item.signal.risks,
+            metrics=item.signal.metrics,
+        ),
+    )
 
 
 def _invalid_analysis_input_error() -> HTTPException:
@@ -117,6 +157,77 @@ def _resolve_and_normalize_input(raw_value: str) -> str:
         return canonical_stock_code(resolved)
 
     raise _invalid_analysis_input_error()
+
+
+@router.get(
+    "/mag7/meta",
+    response_model=Mag7ProfileMetaResponse,
+    summary="获取 Mag7 策略元信息",
+    description="返回美股七姐妹专用页面所需的股票池、默认策略和可选策略列表。",
+)
+def get_mag7_profile_meta() -> Mag7ProfileMetaResponse:
+    service = ProfileStrategyService(profile_name="mag7")
+    strategy_names = ProfileStrategyService.get_available_strategy_names("mag7")
+    strategy_options = []
+    from src.strategies import load_strategy_definition
+
+    for strategy_name in strategy_names:
+        strategy = load_strategy_definition(strategy_name)
+        strategy_options.append(
+            Mag7StrategyOption(
+                name=strategy.name,
+                display_name=strategy.display_name,
+                description=strategy.description,
+            )
+        )
+
+    return Mag7ProfileMetaResponse(
+        profile_name=service.profile.name,
+        display_name=service.profile.display_name,
+        description=service.profile.description,
+        default_strategy=service.profile.default_strategy,
+        stock_universe=service.profile.stock_universe,
+        strategies=strategy_options,
+    )
+
+
+@router.post(
+    "/mag7/run",
+    response_model=Mag7RunResponse,
+    summary="运行 Mag7 专用策略分析",
+    description="基于 yfinance 日K对美股七姐妹运行专用策略分析，返回同步结果。",
+)
+def run_mag7_strategy(request: Mag7RunRequest) -> Mag7RunResponse:
+    try:
+        selected_codes = [_resolve_and_normalize_input(code) for code in (request.stock_codes or [])]
+        service = ProfileStrategyService(profile_name="mag7", strategy_name=request.strategy_name)
+        results = service.run(stocks_override=selected_codes or None)
+
+        return Mag7RunResponse(
+            profile_name=service.profile.name,
+            strategy_name=service.strategy.name,
+            stock_codes=service.resolve_stock_codes(selected_codes or None),
+            results=[_serialize_mag7_result(item) for item in results],
+        )
+    except DataFetchError as exc:
+        logger.warning("Mag7 strategy data fetch failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "data_fetch_failed",
+                "message": f"Mag7 数据获取失败：{exc}",
+                "detail": None,
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "validation_error",
+                "message": str(exc),
+                "detail": None,
+            },
+        ) from exc
 
 
 # ============================================================
