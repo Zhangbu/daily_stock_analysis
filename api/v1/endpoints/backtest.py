@@ -16,9 +16,14 @@ from api.v1.schemas.backtest import (
     BacktestResultItem,
     BacktestResultsResponse,
     PerformanceMetrics,
+    ProfileBacktestRunRequest,
+    ProfileBacktestRunResponse,
+    ProfileBacktestResultItem,
+    ProfileBacktestSummary,
 )
 from api.v1.schemas.common import ErrorResponse
 from src.services.backtest_service import BacktestService
+from src.services.profile_strategy_backtest_service import ProfileStrategyBacktestService
 from src.storage import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -38,6 +43,12 @@ def _validate_analysis_date_range(
                 "message": "analysis_date_from cannot be after analysis_date_to",
             },
         )
+
+
+def _parse_optional_date(value: Optional[str]) -> Optional[date]:
+    if not value:
+        return None
+    return date.fromisoformat(value)
 
 
 @router.post(
@@ -70,6 +81,68 @@ def run_backtest(
             status_code=500,
             detail={"error": "internal_error", "message": f"回测执行失败: {str(exc)}"},
         )
+
+
+@router.post(
+    "/profile/run",
+    response_model=ProfileBacktestRunResponse,
+    responses={
+        200: {"description": "Profile 策略回测完成"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="运行 Profile 策略回测",
+    description="对 mag7 / nasdaq100 这类 profile 策略信号执行窗口回测。",
+)
+def run_profile_backtest(request: ProfileBacktestRunRequest) -> ProfileBacktestRunResponse:
+    try:
+        service = ProfileStrategyBacktestService(
+            profile_name=request.profile_name,
+            strategy_name=request.strategy_name,
+        )
+        payload = service.run(
+            stock_codes=request.stock_codes,
+            analysis_date_from=_parse_optional_date(request.analysis_date_from),
+            analysis_date_to=_parse_optional_date(request.analysis_date_to),
+            eval_window_days=request.eval_window_days,
+            only_passed=request.only_passed,
+        )
+        return ProfileBacktestRunResponse(
+            profile_name=str(payload["profile_name"]),
+            strategy_name=str(payload["strategy_name"]),
+            display_name=str(payload["display_name"]),
+            eval_window_days=int(payload["eval_window_days"]),
+            summary=ProfileBacktestSummary(**payload["summary"]),
+            items=[
+                ProfileBacktestResultItem(
+                    code=item.code,
+                    stock_name=item.stock_name,
+                    analysis_date=item.analysis_date.isoformat(),
+                    entry_date=item.entry_date.isoformat(),
+                    exit_date=item.exit_date.isoformat(),
+                    score=item.score,
+                    grade=item.grade,
+                    verdict=item.verdict,
+                    entry_price=item.entry_price,
+                    exit_price=item.exit_price,
+                    max_return_pct=item.max_return_pct,
+                    min_return_pct=item.min_return_pct,
+                    window_return_pct=item.window_return_pct,
+                    outcome=item.outcome,
+                )
+                for item in payload["items"]
+            ],
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_params", "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        logger.error("Profile 策略回测失败: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"Profile 策略回测失败: {str(exc)}"},
+        ) from exc
 
 
 @router.get(

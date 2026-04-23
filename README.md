@@ -124,6 +124,8 @@ python main.py --profile mag7 --stocks AAPL,NVDA,MSFT
 - 股票池勾选区会额外显示代码对应的中文名、英文名与行业标签
 - 支持按代码/中文名/英文名/行业搜索，并可按行业筛选或仅查看已选股票
 - 股票池会按行业自动分组折叠展示，更适合在大股票池中快速定位目标公司
+- `mag7` / `nasdaq100` 的日 K 会优先复用本地 SQLite `stock_daily` 数据，缺失区间再增量拉取并回写，便于减少重复请求并为后续回测积累数据
+- `/backtest` 页面现在同时支持原有 A 股历史分析回测，以及 `mag7` / `nasdaq100` 的 profile 策略回测，无需额外打开新页面
 
 ### 方式一：GitHub Actions（推荐）
 

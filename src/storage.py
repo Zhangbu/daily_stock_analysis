@@ -79,6 +79,10 @@ class StockDaily(Base):
     
     # 股票代码（如 600519, 000001）
     code = Column(String(10), nullable=False, index=True)
+
+    # 市场与周期，便于复用同一张表存储 A 股 / 港股 / 美股多周期数据
+    market = Column(String(8), nullable=False, default='cn', index=True)
+    interval = Column(String(8), nullable=False, default='1d', index=True)
     
     # 交易日期
     date = Column(Date, nullable=False, index=True)
@@ -120,6 +124,8 @@ class StockDaily(Base):
         """转换为字典"""
         return {
             'code': self.code,
+            'market': self.market,
+            'interval': self.interval,
             'date': self.date,
             'open': self.open,
             'high': self.high,
@@ -691,12 +697,34 @@ class DatabaseManager:
         
         # 创建所有表
         Base.metadata.create_all(self._engine)
+        self._ensure_stock_daily_schema()
 
         self._initialized = True
         logger.info(f"数据库初始化完成: {db_url}")
 
         # 注册退出钩子，确保程序退出时关闭数据库连接
         atexit.register(DatabaseManager._cleanup_engine, self._engine)
+
+    def _ensure_stock_daily_schema(self) -> None:
+        """Best-effort lightweight schema migration for stock_daily."""
+        if not self._is_sqlite_engine:
+            return
+
+        try:
+            with self._engine.begin() as conn:
+                rows = conn.exec_driver_sql("PRAGMA table_info(stock_daily)").fetchall()
+                existing_columns = {str(row[1]) for row in rows}
+
+                if 'market' not in existing_columns:
+                    conn.exec_driver_sql(
+                        "ALTER TABLE stock_daily ADD COLUMN market VARCHAR(8) NOT NULL DEFAULT 'cn'"
+                    )
+                if 'interval' not in existing_columns:
+                    conn.exec_driver_sql(
+                        "ALTER TABLE stock_daily ADD COLUMN interval VARCHAR(8) NOT NULL DEFAULT '1d'"
+                    )
+        except Exception as exc:
+            logger.warning("stock_daily schema migration skipped: %s", exc)
     
     @classmethod
     def get_instance(cls) -> 'DatabaseManager':
@@ -1415,12 +1443,51 @@ class DatabaseManager:
             ).scalars().all()
             
             return list(results)
+
+    def get_daily_data_frame(
+        self,
+        code: str,
+        start_date: date,
+        end_date: date,
+        market: Optional[str] = None,
+        interval: str = "1d",
+    ) -> pd.DataFrame:
+        """
+        Load stock_daily rows as a normalized DataFrame ordered by date.
+        """
+        conditions = [
+            StockDaily.code == code,
+            StockDaily.date >= start_date,
+            StockDaily.date <= end_date,
+        ]
+        if market:
+            conditions.append(StockDaily.market == market)
+        if interval:
+            conditions.append(StockDaily.interval == interval)
+
+        with self.get_session() as session:
+            rows = session.execute(
+                select(StockDaily)
+                .where(and_(*conditions))
+                .order_by(StockDaily.date)
+            ).scalars().all()
+
+        if not rows:
+            return pd.DataFrame()
+
+        records = [row.to_dict() for row in rows]
+        df = pd.DataFrame(records)
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+        return df
     
     def save_daily_data(
         self, 
         df: pd.DataFrame, 
         code: str,
-        data_source: str = "Unknown"
+        data_source: str = "Unknown",
+        market: str = "cn",
+        interval: str = "1d",
     ) -> int:
         """
         保存日线数据到数据库
@@ -1448,6 +1515,8 @@ class DatabaseManager:
             row_date = self._normalize_daily_date(row.get('date'))
             records_by_date[row_date] = {
                 'code': code,
+                'market': market,
+                'interval': interval,
                 'date': row_date,
                 'open': self._normalize_sql_value(row.get('open')),
                 'high': self._normalize_sql_value(row.get('high')),
@@ -1506,6 +1575,8 @@ class DatabaseManager:
                         stmt.on_conflict_do_update(
                             index_elements=['code', 'date'],
                             set_={
+                                'market': excluded.market,
+                                'interval': excluded.interval,
                                 'open': excluded.open,
                                 'high': excluded.high,
                                 'low': excluded.low,
@@ -1542,6 +1613,8 @@ class DatabaseManager:
                         session.add(StockDaily(**record))
                         new_count += 1
                         continue
+                    existing.market = record['market']
+                    existing.interval = record['interval']
                     existing.open = record['open']
                     existing.high = record['high']
                     existing.low = record['low']

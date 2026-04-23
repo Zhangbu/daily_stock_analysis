@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
+import pandas as pd
 from data_provider.yfinance_fetcher import YfinanceFetcher
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
+from src.storage import get_db
 from src.strategies import (
     ProfileDefinition,
     StrategyDefinition,
@@ -60,6 +63,7 @@ class ProfileStrategyService:
         self.fetcher = YfinanceFetcher()
         self.trend_analyzer = StockTrendAnalyzer()
         self.signal_engine = StrategySignalEngine()
+        self.db = get_db()
 
     @staticmethod
     def get_available_strategy_names(profile_name: str) -> List[str]:
@@ -84,7 +88,7 @@ class ProfileStrategyService:
                 self.strategy.name,
                 code,
             )
-            df = self.fetcher.get_daily_data(code, days=self.profile.lookback_days)
+            df = self.load_daily_data(code)
             trend = self.trend_analyzer.analyze(df, code)
             signal = self.signal_engine.evaluate(self.strategy.name, df, trend, self.strategy.parameters)
             results.append(
@@ -98,6 +102,83 @@ class ProfileStrategyService:
             )
 
         return sorted(results, key=lambda item: item.signal.score, reverse=True)
+
+    def _resolve_market(self, code: str) -> str:
+        normalized = str(code).strip().upper()
+        if normalized.startswith("HK") or normalized.endswith(".HK"):
+            return "hk"
+        if normalized.isalpha():
+            return "us"
+        return "cn"
+
+    def _build_date_window(self) -> tuple[date, date]:
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=self.profile.lookback_days * 2)
+        return start_date, end_date
+
+    def load_daily_data(self, code: str):
+        market = self._resolve_market(code)
+        start_date, end_date = self._build_date_window()
+        cached_df = self.db.get_daily_data_frame(
+            code=code,
+            start_date=start_date,
+            end_date=end_date,
+            market=market,
+            interval=self.profile.interval,
+        )
+
+        if self._is_cached_data_ready(cached_df, end_date):
+            logger.info(
+                "[ProfileStrategy] Reusing SQLite daily data for %s (%s rows)",
+                code,
+                len(cached_df),
+            )
+            return cached_df
+
+        fetch_start = start_date.strftime("%Y-%m-%d")
+        if not cached_df.empty and 'date' in cached_df.columns:
+            latest_cached = pd.to_datetime(cached_df['date']).max()
+            if pd.notna(latest_cached):
+                fetch_start_dt = max(
+                    start_date,
+                    latest_cached.date() - timedelta(days=40),
+                )
+                fetch_start = fetch_start_dt.strftime("%Y-%m-%d")
+
+        fetched_df = self.fetcher.get_daily_data(
+            code,
+            start_date=fetch_start,
+            end_date=end_date.strftime("%Y-%m-%d"),
+        )
+        self.db.save_daily_data(
+            fetched_df,
+            code=code,
+            data_source=self.fetcher.name,
+            market=market,
+            interval=self.profile.interval,
+        )
+
+        merged_df = self.db.get_daily_data_frame(
+            code=code,
+            start_date=start_date,
+            end_date=end_date,
+            market=market,
+            interval=self.profile.interval,
+        )
+        return merged_df if not merged_df.empty else fetched_df
+
+    def _is_cached_data_ready(self, df, end_date: date) -> bool:
+        if df is None or df.empty or len(df) < self.profile.lookback_days:
+            return False
+        if 'date' not in df.columns:
+            return False
+
+        latest_date = pd.to_datetime(df['date']).max()
+        if pd.isna(latest_date):
+            return False
+
+        max_lag_days = 5 if self.profile.name in {"mag7", "nasdaq100"} else 3
+        return latest_date.date() >= end_date - timedelta(days=max_lag_days)
 
     def format_report(self, results: List[ProfileStrategyResult]) -> str:
         lines = [

@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] Nasdaq-100 页面新增股票中文名/英文名/行业元数据展示，支持按关键词、行业和已选状态筛选股票池，提升大股票池场景下的选股效率
 - [改进] 策略画像页的股票池进一步支持按行业分组折叠展示，Profile 元数据中的股票名称与行业信息改由后端统一提供，减少前端静态配置重复
 - [修复] YfinanceFetcher 在美股日K链路中改为优先使用 Yahoo chart API，规避部分本地环境 `curl_cffi/OpenSSL` 导致的 `curl: (35) TLS connect error` 噪音与失败
+- [新功能] `mag7` / `nasdaq100` 策略链路接入 SQLite `stock_daily` 持久化，优先复用本地日 K 数据，不足时自动增量补拉并回写，同时为 `stock_daily` 补充 `market` / `interval` 维度，便于后续回测扩展
+- [新功能] `/backtest` 页面新增 Profile 策略回测模式，可直接对 `mag7` / `nasdaq100` 运行 `mag7_ma_pullback`、`mag7_breakout`、`mag7_ma_cross` 的窗口回测，并展示信号级收益结果
 - [修复] 修复 Windows 桌面端转抄后端 stdout/stderr 时中文日志可能乱码的问题，统一优先使用 UTF-8 并兼容本地代码页回退
 - [改进] Docker 发布工作流收敛为更清晰的正式发布与手动补发链路，并统一官方 Docker Hub 镜像名为 `zhulinsen/daily_stock_analysis`
 - [文档] 补充官方镜像拉取、`docker run` 用法与 `.env` / 数据目录映射说明，不再仅覆盖 Compose 部署路径

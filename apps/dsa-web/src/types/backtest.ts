@@ -13,12 +13,68 @@ export interface BacktestRunRequest {
   limit?: number;
 }
 
+export interface ProfileBacktestRunRequest {
+  profileName: string;
+  strategyName: string;
+  stockCodes?: string[];
+  analysisDateFrom?: string;
+  analysisDateTo?: string;
+  evalWindowDays?: number;
+  onlyPassed?: boolean;
+}
+
 export interface BacktestRunResponse {
   processed: number;
   saved: number;
   completed: number;
   insufficient: number;
   errors: number;
+}
+
+export interface ProfileBacktestSummaryByCodeItem {
+  stockName: string;
+  signals: number;
+  winRatePct?: number;
+  avgReturnPct?: number;
+}
+
+export interface ProfileBacktestSummary {
+  totalSignals: number;
+  wins: number;
+  losses: number;
+  neutrals: number;
+  winRatePct?: number;
+  avgReturnPct?: number;
+  avgMaxReturnPct?: number;
+  avgMinReturnPct?: number;
+  evalWindowDays: number;
+  byCode: Record<string, ProfileBacktestSummaryByCodeItem>;
+}
+
+export interface ProfileBacktestResultItem {
+  code: string;
+  stockName: string;
+  analysisDate: string;
+  entryDate: string;
+  exitDate: string;
+  score: number;
+  grade: string;
+  verdict: string;
+  entryPrice: number;
+  exitPrice: number;
+  maxReturnPct: number;
+  minReturnPct: number;
+  windowReturnPct: number;
+  outcome: string;
+}
+
+export interface ProfileBacktestRunResponse {
+  profileName: string;
+  strategyName: string;
+  displayName: string;
+  evalWindowDays: number;
+  summary: ProfileBacktestSummary;
+  items: ProfileBacktestResultItem[];
 }
 
 // ============ Result Item ============

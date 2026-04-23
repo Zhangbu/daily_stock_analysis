@@ -6,6 +6,8 @@ import type {
   BacktestResultsResponse,
   BacktestResultItem,
   PerformanceMetrics,
+  ProfileBacktestRunRequest,
+  ProfileBacktestRunResponse,
 } from '../types/backtest';
 
 // ============ API ============
@@ -27,6 +29,24 @@ export const backtestApi = {
       requestData,
     );
     return toCamelCase<BacktestRunResponse>(response.data);
+  },
+
+  runProfile: async (params: ProfileBacktestRunRequest): Promise<ProfileBacktestRunResponse> => {
+    const requestData: Record<string, unknown> = {
+      profile_name: params.profileName,
+      strategy_name: params.strategyName,
+      eval_window_days: params.evalWindowDays ?? 10,
+      only_passed: params.onlyPassed ?? true,
+    };
+    if (params.stockCodes?.length) requestData.stock_codes = params.stockCodes;
+    if (params.analysisDateFrom) requestData.analysis_date_from = params.analysisDateFrom;
+    if (params.analysisDateTo) requestData.analysis_date_to = params.analysisDateTo;
+
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/backtest/profile/run',
+      requestData,
+    );
+    return toCamelCase<ProfileBacktestRunResponse>(response.data);
   },
 
   /**

@@ -233,6 +233,14 @@ export const ProfileStrategyPage: React.FC<ProfileStrategyPageProps> = ({
     setSelectedStocks((prev) => Array.from(new Set([...prev, ...filteredCodes])));
   };
 
+  const toggleSelectAllStocks = () => {
+    if (!meta) {
+      return;
+    }
+    const isAllSelected = selectedStocks.length === meta.stockUniverse.length;
+    setSelectedStocks(isAllSelected ? [] : meta.stockUniverse);
+  };
+
   const clearSelectedStocks = () => {
     setSelectedStocks([]);
   };
@@ -376,9 +384,9 @@ export const ProfileStrategyPage: React.FC<ProfileStrategyPageProps> = ({
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => setSelectedStocks(meta.stockUniverse)}
+                        onClick={toggleSelectAllStocks}
                       >
-                        全选
+                        {selectedStocks.length === meta.stockUniverse.length ? '全不选' : '全选'}
                       </Button>
                       <Button
                         variant="ghost"

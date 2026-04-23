@@ -16,12 +16,61 @@ class BacktestRunRequest(BaseModel):
     limit: int = Field(200, ge=1, le=2000, description="最多处理的分析记录数")
 
 
+class ProfileBacktestRunRequest(BaseModel):
+    profile_name: str = Field(..., description="画像名称", examples=["mag7", "nasdaq100"])
+    strategy_name: str = Field(..., description="策略名称", examples=["mag7_breakout"])
+    stock_codes: Optional[List[str]] = Field(None, description="可选：只回测指定股票列表")
+    analysis_date_from: Optional[str] = Field(None, description="信号起始日期 YYYY-MM-DD")
+    analysis_date_to: Optional[str] = Field(None, description="信号结束日期 YYYY-MM-DD")
+    eval_window_days: int = Field(10, ge=1, le=60, description="持有窗口（交易日数）")
+    only_passed: bool = Field(True, description="仅统计通过策略阈值的信号")
+
+
 class BacktestRunResponse(BaseModel):
     processed: int = Field(..., description="候选记录数")
     saved: int = Field(..., description="写入回测结果数")
     completed: int = Field(..., description="完成回测数")
     insufficient: int = Field(..., description="数据不足数")
     errors: int = Field(..., description="错误数")
+
+
+class ProfileBacktestSummary(BaseModel):
+    total_signals: int
+    wins: int
+    losses: int
+    neutrals: int
+    win_rate_pct: Optional[float] = None
+    avg_return_pct: Optional[float] = None
+    avg_max_return_pct: Optional[float] = None
+    avg_min_return_pct: Optional[float] = None
+    eval_window_days: int
+    by_code: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ProfileBacktestResultItem(BaseModel):
+    code: str
+    stock_name: str
+    analysis_date: str
+    entry_date: str
+    exit_date: str
+    score: int
+    grade: str
+    verdict: str
+    entry_price: float
+    exit_price: float
+    max_return_pct: float
+    min_return_pct: float
+    window_return_pct: float
+    outcome: str
+
+
+class ProfileBacktestRunResponse(BaseModel):
+    profile_name: str
+    strategy_name: str
+    display_name: str
+    eval_window_days: int
+    summary: ProfileBacktestSummary
+    items: List[ProfileBacktestResultItem] = Field(default_factory=list)
 
 
 class BacktestResultItem(BaseModel):
