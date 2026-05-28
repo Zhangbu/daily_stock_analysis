@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -19,6 +19,7 @@ from api.v1.schemas.backtest import (
     ProfileBacktestRunRequest,
     ProfileBacktestRunResponse,
     ProfileBacktestResultItem,
+    ProfileBacktestResultsResponse,
     ProfileBacktestSummary,
 )
 from api.v1.schemas.common import ErrorResponse
@@ -136,6 +137,123 @@ def run_profile_backtest(request: ProfileBacktestRunRequest) -> ProfileBacktestR
         raise HTTPException(
             status_code=400,
             detail={"error": "invalid_params", "message": str(exc)},
+        ) from exc
+
+
+@router.get(
+    "/profile/results",
+    response_model=ProfileBacktestResultsResponse,
+    responses={
+        200: {"description": "Profile 策略回测结果列表"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取 Profile 策略回测结果",
+)
+def get_profile_backtest_results(
+    profile_name: str = Query(..., description="画像名称"),
+    strategy_name: str = Query(..., description="策略名称"),
+    code: Optional[str] = Query(None, description="股票代码过滤"),
+    outcome: Optional[Literal["win", "loss", "neutral"]] = Query(None, description="结果类型过滤"),
+    eval_window_days: Optional[int] = Query(None, ge=1, le=60, description="评估窗口过滤"),
+    analysis_date_from: Optional[date] = Query(None, description="分析日期起始（含）"),
+    analysis_date_to: Optional[date] = Query(None, description="分析日期结束（含）"),
+    sort_by: Literal["analysis_date", "score", "window_return_pct", "max_return_pct", "min_return_pct"] = Query(
+        "analysis_date",
+        description="排序字段",
+    ),
+    sort_order: Literal["asc", "desc"] = Query("desc", description="排序方向"),
+    page: int = Query(1, ge=1, description="页码"),
+    limit: int = Query(50, ge=1, le=500, description="每页数量"),
+) -> ProfileBacktestResultsResponse:
+    try:
+        _validate_analysis_date_range(analysis_date_from, analysis_date_to)
+        service = ProfileStrategyBacktestService(profile_name=profile_name, strategy_name=strategy_name)
+        payload = service.get_persisted_results(
+            analysis_date_from=analysis_date_from,
+            analysis_date_to=analysis_date_to,
+            code=code,
+            outcome=outcome,
+            eval_window_days=eval_window_days,
+            page=page,
+            limit=limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        return ProfileBacktestResultsResponse(
+            total=int(payload["total"]),
+            page=int(payload["page"]),
+            limit=int(payload["limit"]),
+            sort_by=str(payload["sort_by"]),
+            sort_order=str(payload["sort_order"]),
+            items=[
+                ProfileBacktestResultItem(
+                    code=item.code,
+                    stock_name=item.stock_name,
+                    analysis_date=item.analysis_date.isoformat(),
+                    entry_date=item.entry_date.isoformat(),
+                    exit_date=item.exit_date.isoformat(),
+                    score=item.score,
+                    grade=item.grade,
+                    verdict=item.verdict,
+                    entry_price=item.entry_price,
+                    exit_price=item.exit_price,
+                    max_return_pct=item.max_return_pct,
+                    min_return_pct=item.min_return_pct,
+                    window_return_pct=item.window_return_pct,
+                    outcome=item.outcome,
+                )
+                for item in payload["items"]
+            ],
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_params", "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        logger.error("查询 Profile 策略回测结果失败: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"查询 Profile 策略回测结果失败: {str(exc)}"},
+        ) from exc
+
+
+@router.get(
+    "/profile/summary",
+    response_model=ProfileBacktestSummary,
+    responses={
+        200: {"description": "Profile 策略回测汇总"},
+        404: {"description": "无回测汇总", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取 Profile 策略回测汇总",
+)
+def get_profile_backtest_summary(
+    profile_name: str = Query(..., description="画像名称"),
+    strategy_name: str = Query(..., description="策略名称"),
+    eval_window_days: Optional[int] = Query(None, ge=1, le=60, description="评估窗口过滤"),
+) -> ProfileBacktestSummary:
+    try:
+        service = ProfileStrategyBacktestService(profile_name=profile_name, strategy_name=strategy_name)
+        summary = service.get_persisted_summary(eval_window_days=eval_window_days)
+        if summary is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "未找到 Profile 策略回测汇总"},
+            )
+        return ProfileBacktestSummary(**summary)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_params", "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        logger.error("查询 Profile 策略回测汇总失败: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"查询 Profile 策略回测汇总失败: {str(exc)}"},
         ) from exc
     except Exception as exc:
         logger.error("Profile 策略回测失败: %s", exc, exc_info=True)

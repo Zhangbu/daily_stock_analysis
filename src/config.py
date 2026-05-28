@@ -343,6 +343,33 @@ def _uses_direct_env_provider(model: str) -> bool:
     return bool(provider) and provider not in _MANAGED_LITELLM_KEY_PROVIDERS
 
 
+def _is_known_litellm_provider_prefix(prefix: str) -> bool:
+    """Whether a slash prefix is a real LiteLLM provider identifier."""
+    canonical_prefix = canonicalize_llm_channel_protocol(prefix)
+    known_providers = _MANAGED_LITELLM_KEY_PROVIDERS | set(SUPPORTED_LLM_CHANNEL_PROTOCOLS) | {
+        "minimax",
+        "cohere", "huggingface", "bedrock", "sagemaker", "azure",
+        "replicate", "together_ai", "palm", "text-completion-openai",
+        "command-r", "groq", "cerebras", "fireworks_ai", "friendliai",
+    }
+    return prefix in known_providers or canonical_prefix in known_providers
+
+
+def _is_openai_compatible_custom_model(model: str, config: "Config") -> bool:
+    """Whether a model should be routed via the OpenAI-compatible handler.
+
+    Some OpenAI-compatible upstreams expose slash-containing model IDs such as
+    ``z-ai/glm-5.1``. Those slashes are part of the upstream model name, not a
+    LiteLLM provider prefix, so we must keep the raw model while explicitly
+    routing through the OpenAI-compatible adapter.
+    """
+    normalized_model = (model or "").strip()
+    if not normalized_model or not config.openai_base_url or "/" not in normalized_model:
+        return False
+    raw_prefix = normalized_model.split("/", 1)[0].lower()
+    return not _is_known_litellm_provider_prefix(raw_prefix)
+
+
 def normalize_agent_litellm_model(
     model: str,
     configured_models: Optional[set[str]] = None,
@@ -450,6 +477,8 @@ class Config:
 
     # Unified temperature for all LLM calls (LLM_TEMPERATURE); legacy per-provider temps are fallback only
     llm_temperature: float = 0.7
+    llm_request_timeout_seconds: float = 30.0
+    llm_request_max_retries: int = 0
 
     # --- Multi-channel LLM config (new) ---
     # LITELLM_CONFIG: path to a standard litellm_config.yaml file (most powerful)
@@ -945,7 +974,9 @@ class Config:
             elif deepseek_api_keys:
                 litellm_model = 'deepseek/deepseek-chat'
             elif openai_api_keys:
-                # For openai-compatible models, add prefix only if not already prefixed
+                # Preserve upstream model IDs for OpenAI-compatible gateways.
+                # Slash-containing names such as "z-ai/glm-5.1" are handled at
+                # request dispatch time by explicitly setting custom_llm_provider.
                 if '/' not in _openai_model_name:
                     litellm_model = f'openai/{_openai_model_name}'
                 else:
@@ -1118,6 +1149,19 @@ class Config:
             litellm_model=litellm_model,
             litellm_fallback_models=litellm_fallback_models,
             llm_temperature=resolve_unified_llm_temperature(litellm_model),
+            llm_request_timeout_seconds=parse_env_float(
+                os.getenv('LLM_REQUEST_TIMEOUT_SECONDS'),
+                30.0,
+                field_name='LLM_REQUEST_TIMEOUT_SECONDS',
+                minimum=5.0,
+            ),
+            llm_request_max_retries=parse_env_int(
+                os.getenv('LLM_REQUEST_MAX_RETRIES'),
+                0,
+                field_name='LLM_REQUEST_MAX_RETRIES',
+                minimum=0,
+                maximum=5,
+            ),
             litellm_config_path=litellm_config_path,
             llm_models_source=llm_models_source,
             llm_channels=llm_channels,
@@ -2318,7 +2362,7 @@ def get_api_keys_for_model(model: str, config: Config) -> List[str]:
         return [k for k in config.anthropic_api_keys if k and len(k) >= 8]
     if provider == "deepseek":
         return [k for k in config.deepseek_api_keys if k and len(k) >= 8]
-    if provider == "openai":
+    if provider == "openai" or _is_openai_compatible_custom_model(model, config):
         return [k for k in config.openai_api_keys if k and len(k) >= 8]
     # Other LiteLLM-native providers – API key resolved from env vars
     return []
@@ -2334,7 +2378,9 @@ def extra_litellm_params(model: str, config: Config) -> Dict[str, Any]:
     # deepseek/ provider: litellm auto-resolves api_base, no manual override needed
     if model.startswith("deepseek/"):
         return params
-    if model.startswith("openai/") or "/" not in model:
+    if model.startswith("openai/") or "/" not in model or _is_openai_compatible_custom_model(model, config):
+        if _is_openai_compatible_custom_model(model, config):
+            params["custom_llm_provider"] = "openai"
         if config.openai_base_url:
             params["api_base"] = config.openai_base_url
         if config.openai_base_url and "aihubmix.com" in config.openai_base_url:

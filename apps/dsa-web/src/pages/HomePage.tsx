@@ -35,6 +35,7 @@ const HomePage: React.FC = () => {
     clearError,
     loadInitialHistory,
     refreshHistory,
+    focusLatestHistoryForStock,
     loadMoreHistory,
     selectHistoryItem,
     toggleHistorySelection,
@@ -61,6 +62,7 @@ const HomePage: React.FC = () => {
   useDashboardLifecycle({
     loadInitialHistory,
     refreshHistory,
+    focusLatestHistoryForStock,
     syncTaskCreated,
     syncTaskUpdated,
     syncTaskFailed,
@@ -98,6 +100,20 @@ const HomePage: React.FC = () => {
     const rid = selectedReport.meta.id;
     navigate(`/chat?stock=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}&recordId=${rid}`);
   }, [navigate, selectedReport]);
+
+  const handleReanalyzeLatest = useCallback(() => {
+    if (!selectedReport?.meta.stockCode) {
+      return;
+    }
+
+    void submitAnalysis({
+      stockCode: selectedReport.meta.stockCode,
+      stockName: selectedReport.meta.stockName,
+      originalQuery: selectedReport.meta.stockCode,
+      selectionSource: 'manual',
+      notify,
+    });
+  }, [notify, selectedReport, submitAnalysis]);
 
   const handleDeleteSelectedHistory = useCallback(() => {
     void deleteSelectedHistory();
@@ -253,6 +269,19 @@ const HomePage: React.FC = () => {
             ) : selectedReport ? (
               <div className="max-w-4xl space-y-4 pb-8">
                 <div className="flex flex-wrap items-center justify-end gap-2">
+                  {selectedReport.meta.dataIsStale ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={isAnalyzing}
+                      onClick={handleReanalyzeLatest}
+                    >
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M5.64 18.36A9 9 0 103.51 9m14.85-3.36A9 9 0 0120.49 15" />
+                      </svg>
+                      {isAnalyzing ? '重新分析中' : '基于最新行情重新分析'}
+                    </Button>
+                  ) : null}
                   <Button
                     variant="home-action-ai"
                     size="sm"

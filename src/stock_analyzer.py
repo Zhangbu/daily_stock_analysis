@@ -88,6 +88,13 @@ class TrendAnalysisResult:
     trend_status: TrendStatus = TrendStatus.CONSOLIDATION
     ma_alignment: str = ""           # 均线排列描述
     trend_strength: float = 0.0      # 趋势强度 0-100
+    weekly_trend_status: str = ""    # 周线趋势状态
+    weekly_ma_alignment: str = ""    # 周线均线排列描述
+    weekly_trend_strength: float = 0.0
+    weekly_bias_ma5: float = 0.0
+    weekly_bias_ma10: float = 0.0
+    timeframe_resonance: str = ""    # 周日共振描述
+    timeframe_action_bias: str = ""  # 周期视角下的操作倾向
     
     # 均线数据
     ma5: float = 0.0
@@ -105,6 +112,23 @@ class TrendAnalysisResult:
     volume_status: VolumeStatus = VolumeStatus.NORMAL
     volume_ratio_5d: float = 0.0     # 当日成交量/5日均量
     volume_trend: str = ""           # 量能趋势描述
+
+    # A-share session structure signals
+    open_price: float = 0.0
+    high_price: float = 0.0
+    low_price: float = 0.0
+    prev_close: float = 0.0
+    intraday_pattern: str = ""       # e.g. 高开低走 / 低开高走
+    close_position_pct: float = 50.0  # Close position inside daily range, 0=near low, 100=near high
+    upper_shadow_pct: float = 0.0
+    lower_shadow_pct: float = 0.0
+    limit_up_price: float = 0.0
+    limit_down_price: float = 0.0
+    distance_to_limit_up_pct: float = 0.0
+    distance_to_limit_down_pct: float = 0.0
+    near_limit_up: bool = False
+    near_limit_down: bool = False
+    weak_close: bool = False
     
     # 支撑压力
     support_ma5: bool = False        # MA5 是否构成支撑
@@ -138,6 +162,13 @@ class TrendAnalysisResult:
             'trend_status': self.trend_status.value,
             'ma_alignment': self.ma_alignment,
             'trend_strength': self.trend_strength,
+            'weekly_trend_status': self.weekly_trend_status,
+            'weekly_ma_alignment': self.weekly_ma_alignment,
+            'weekly_trend_strength': self.weekly_trend_strength,
+            'weekly_bias_ma5': self.weekly_bias_ma5,
+            'weekly_bias_ma10': self.weekly_bias_ma10,
+            'timeframe_resonance': self.timeframe_resonance,
+            'timeframe_action_bias': self.timeframe_action_bias,
             'ma5': self.ma5,
             'ma10': self.ma10,
             'ma20': self.ma20,
@@ -149,6 +180,21 @@ class TrendAnalysisResult:
             'volume_status': self.volume_status.value,
             'volume_ratio_5d': self.volume_ratio_5d,
             'volume_trend': self.volume_trend,
+            'open_price': self.open_price,
+            'high_price': self.high_price,
+            'low_price': self.low_price,
+            'prev_close': self.prev_close,
+            'intraday_pattern': self.intraday_pattern,
+            'close_position_pct': self.close_position_pct,
+            'upper_shadow_pct': self.upper_shadow_pct,
+            'lower_shadow_pct': self.lower_shadow_pct,
+            'limit_up_price': self.limit_up_price,
+            'limit_down_price': self.limit_down_price,
+            'distance_to_limit_up_pct': self.distance_to_limit_up_pct,
+            'distance_to_limit_down_pct': self.distance_to_limit_down_pct,
+            'near_limit_up': self.near_limit_up,
+            'near_limit_down': self.near_limit_down,
+            'weak_close': self.weak_close,
             'support_ma5': self.support_ma5,
             'support_ma10': self.support_ma10,
             'buy_signal': self.buy_signal.value,
@@ -233,6 +279,11 @@ class StockTrendAnalyzer:
         # 获取最新数据
         latest = df.iloc[-1]
         result.current_price = float(latest['close'])
+        result.open_price = float(latest.get('open', 0.0) or 0.0)
+        result.high_price = float(latest.get('high', 0.0) or 0.0)
+        result.low_price = float(latest.get('low', 0.0) or 0.0)
+        if len(df) >= 2:
+            result.prev_close = float(df.iloc[-2].get('close', 0.0) or 0.0)
         result.ma5 = float(latest['MA5'])
         result.ma10 = float(latest['MA10'])
         result.ma20 = float(latest['MA20'])
@@ -240,6 +291,7 @@ class StockTrendAnalyzer:
 
         # 1. 趋势判断
         self._analyze_trend(df, result)
+        self._analyze_weekly_trend(df, result)
 
         # 2. 乖离率计算
         self._calculate_bias(result)
@@ -250,13 +302,16 @@ class StockTrendAnalyzer:
         # 4. 支撑压力分析
         self._analyze_support_resistance(df, result)
 
-        # 5. MACD 分析
+        # 5. A-share style session structure analysis
+        self._analyze_session_structure(result)
+
+        # 6. MACD 分析
         self._analyze_macd(df, result)
 
-        # 6. RSI 分析
+        # 7. RSI 分析
         self._analyze_rsi(df, result)
 
-        # 7. 生成买入信号
+        # 8. 生成买入信号
         self._generate_signal(result)
 
         return result
@@ -342,52 +397,131 @@ class StockTrendAnalyzer:
         
         核心逻辑：判断均线排列和趋势强度
         """
-        ma5, ma10, ma20 = result.ma5, result.ma10, result.ma20
-        
-        # 判断均线排列
-        if ma5 > ma10 > ma20:
-            # 检查间距是否在扩大（强势）
-            prev = df.iloc[-5] if len(df) >= 5 else df.iloc[-1]
-            prev_spread = (prev['MA5'] - prev['MA20']) / prev['MA20'] * 100 if prev['MA20'] > 0 else 0
-            curr_spread = (ma5 - ma20) / ma20 * 100 if ma20 > 0 else 0
-            
-            if curr_spread > prev_spread and curr_spread > 5:
-                result.trend_status = TrendStatus.STRONG_BULL
-                result.ma_alignment = "强势多头排列，均线发散上行"
-                result.trend_strength = 90
-            else:
-                result.trend_status = TrendStatus.BULL
-                result.ma_alignment = "多头排列 MA5>MA10>MA20"
-                result.trend_strength = 75
-                
-        elif ma5 > ma10 and ma10 <= ma20:
-            result.trend_status = TrendStatus.WEAK_BULL
-            result.ma_alignment = "弱势多头，MA5>MA10 但 MA10≤MA20"
-            result.trend_strength = 55
-            
-        elif ma5 < ma10 < ma20:
-            prev = df.iloc[-5] if len(df) >= 5 else df.iloc[-1]
-            prev_spread = (prev['MA20'] - prev['MA5']) / prev['MA5'] * 100 if prev['MA5'] > 0 else 0
-            curr_spread = (ma20 - ma5) / ma5 * 100 if ma5 > 0 else 0
-            
-            if curr_spread > prev_spread and curr_spread > 5:
-                result.trend_status = TrendStatus.STRONG_BEAR
-                result.ma_alignment = "强势空头排列，均线发散下行"
-                result.trend_strength = 10
-            else:
-                result.trend_status = TrendStatus.BEAR
-                result.ma_alignment = "空头排列 MA5<MA10<MA20"
-                result.trend_strength = 25
-                
-        elif ma5 < ma10 and ma10 >= ma20:
-            result.trend_status = TrendStatus.WEAK_BEAR
-            result.ma_alignment = "弱势空头，MA5<MA10 但 MA10≥MA20"
-            result.trend_strength = 40
-            
+        prev = df.iloc[-5] if len(df) >= 5 else df.iloc[-1]
+        trend_status, ma_alignment, trend_strength = self._classify_trend_state(
+            result.ma5,
+            result.ma10,
+            result.ma20,
+            prev_ma5=float(prev.get('MA5', result.ma5) or result.ma5),
+            prev_ma20=float(prev.get('MA20', result.ma20) or result.ma20),
+        )
+        result.trend_status = trend_status
+        result.ma_alignment = ma_alignment
+        result.trend_strength = trend_strength
+
+    def _analyze_weekly_trend(self, df: pd.DataFrame, result: TrendAnalysisResult) -> None:
+        """Derive a higher-timeframe weekly trend and day/week resonance."""
+        weekly_df = self._build_weekly_bars(df)
+        if weekly_df is None or weekly_df.empty or len(weekly_df) < 20:
+            result.weekly_trend_status = "周线数据不足"
+            result.weekly_ma_alignment = "周线样本不足，暂不判断"
+            result.weekly_trend_strength = 0.0
+            result.timeframe_resonance = "周线未确认"
+            result.timeframe_action_bias = "仅参考日线，降低仓位"
+            return
+
+        weekly_df = self._calculate_mas(weekly_df)
+        latest = weekly_df.iloc[-1]
+        prev = weekly_df.iloc[-3] if len(weekly_df) >= 3 else weekly_df.iloc[-1]
+        weekly_status, weekly_alignment, weekly_strength = self._classify_trend_state(
+            float(latest['MA5']),
+            float(latest['MA10']),
+            float(latest['MA20']),
+            prev_ma5=float(prev.get('MA5', latest['MA5']) or latest['MA5']),
+            prev_ma20=float(prev.get('MA20', latest['MA20']) or latest['MA20']),
+        )
+
+        result.weekly_trend_status = weekly_status.value
+        result.weekly_ma_alignment = weekly_alignment
+        result.weekly_trend_strength = weekly_strength
+
+        weekly_close = float(latest['close'])
+        weekly_ma5 = float(latest['MA5'])
+        weekly_ma10 = float(latest['MA10'])
+        if weekly_ma5 > 0:
+            result.weekly_bias_ma5 = (weekly_close - weekly_ma5) / weekly_ma5 * 100
+        if weekly_ma10 > 0:
+            result.weekly_bias_ma10 = (weekly_close - weekly_ma10) / weekly_ma10 * 100
+
+        bullish_daily = result.trend_status in {TrendStatus.STRONG_BULL, TrendStatus.BULL, TrendStatus.WEAK_BULL}
+        bullish_weekly = weekly_status in {TrendStatus.STRONG_BULL, TrendStatus.BULL, TrendStatus.WEAK_BULL}
+        bearish_daily = result.trend_status in {TrendStatus.BEAR, TrendStatus.STRONG_BEAR, TrendStatus.WEAK_BEAR}
+        bearish_weekly = weekly_status in {TrendStatus.BEAR, TrendStatus.STRONG_BEAR, TrendStatus.WEAK_BEAR}
+
+        if bullish_daily and bullish_weekly:
+            result.timeframe_resonance = "周日共振偏多"
+            result.timeframe_action_bias = "顺势为主，可优先等待日线回踩确认"
+        elif bullish_weekly and result.trend_status == TrendStatus.CONSOLIDATION:
+            result.timeframe_resonance = "周强日整"
+            result.timeframe_action_bias = "中期结构尚可，等日线重新转强"
+        elif bullish_daily and weekly_status == TrendStatus.CONSOLIDATION:
+            result.timeframe_resonance = "日强周整"
+            result.timeframe_action_bias = "短线走强，但仍需警惕周线压力"
+        elif bullish_daily and bearish_weekly:
+            result.timeframe_resonance = "日线反弹，周线未确认"
+            result.timeframe_action_bias = "更像反弹博弈，宜轻仓快进快出"
+        elif bearish_daily and bullish_weekly:
+            result.timeframe_resonance = "周线偏多但日线转弱"
+            result.timeframe_action_bias = "中期趋势未坏，短线等待止跌信号"
+        elif bearish_daily and bearish_weekly:
+            result.timeframe_resonance = "周日共振偏空"
+            result.timeframe_action_bias = "以防守为主，避免逆势抄底"
         else:
-            result.trend_status = TrendStatus.CONSOLIDATION
-            result.ma_alignment = "均线缠绕，趋势不明"
-            result.trend_strength = 50
+            result.timeframe_resonance = "周日分歧"
+            result.timeframe_action_bias = "周期方向不一致，降低仓位等待确认"
+
+    def _build_weekly_bars(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Aggregate daily bars into weekly OHLCV bars."""
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        weekly_df = df.copy()
+        weekly_df['date'] = pd.to_datetime(weekly_df['date'])
+        weekly_df = weekly_df.sort_values('date')
+        weekly_df = weekly_df.set_index('date')
+
+        aggregated = weekly_df.resample('W-FRI').agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum',
+        })
+
+        if 'amount' in weekly_df.columns:
+            aggregated['amount'] = weekly_df['amount'].resample('W-FRI').sum()
+
+        aggregated = aggregated.dropna(subset=['open', 'high', 'low', 'close']).reset_index()
+        aggregated['date'] = aggregated['date'].dt.date
+        return aggregated
+
+    def _classify_trend_state(
+        self,
+        ma5: float,
+        ma10: float,
+        ma20: float,
+        *,
+        prev_ma5: float,
+        prev_ma20: float,
+    ) -> tuple[TrendStatus, str, float]:
+        """Classify MA structure into a trend label and strength score."""
+        if ma5 > ma10 > ma20:
+            prev_spread = (prev_ma5 - prev_ma20) / prev_ma20 * 100 if prev_ma20 > 0 else 0
+            curr_spread = (ma5 - ma20) / ma20 * 100 if ma20 > 0 else 0
+            if curr_spread > prev_spread and curr_spread > 5:
+                return TrendStatus.STRONG_BULL, "强势多头排列，均线发散上行", 90
+            return TrendStatus.BULL, "多头排列 MA5>MA10>MA20", 75
+        if ma5 > ma10 and ma10 <= ma20:
+            return TrendStatus.WEAK_BULL, "弱势多头，MA5>MA10 但 MA10≤MA20", 55
+        if ma5 < ma10 < ma20:
+            prev_spread = (prev_ma20 - prev_ma5) / prev_ma5 * 100 if prev_ma5 > 0 else 0
+            curr_spread = (ma20 - ma5) / ma5 * 100 if ma5 > 0 else 0
+            if curr_spread > prev_spread and curr_spread > 5:
+                return TrendStatus.STRONG_BEAR, "强势空头排列，均线发散下行", 10
+            return TrendStatus.BEAR, "空头排列 MA5<MA10<MA20", 25
+        if ma5 < ma10 and ma10 >= ma20:
+            return TrendStatus.WEAK_BEAR, "弱势空头，MA5<MA10 但 MA10≥MA20", 40
+        return TrendStatus.CONSOLIDATION, "均线缠绕，趋势不明", 50
     
     def _calculate_bias(self, result: TrendAnalysisResult) -> None:
         """
@@ -476,6 +610,69 @@ class StockTrendAnalyzer:
             recent_high = df['high'].iloc[-20:].max()
             if recent_high > price:
                 result.resistance_levels.append(recent_high)
+
+    def _analyze_session_structure(self, result: TrendAnalysisResult) -> None:
+        """
+        Analyze China A-share intraday structure signals.
+
+        This keeps the logic lightweight and interpretable:
+        - gap direction
+        - close location inside daily range
+        - upper/lower shadow pressure
+        - approximate distance to limit-up / limit-down
+        """
+        open_price = result.open_price
+        high_price = result.high_price
+        low_price = result.low_price
+        close_price = result.current_price
+        prev_close = result.prev_close
+
+        if high_price <= 0 or low_price <= 0 or close_price <= 0:
+            return
+
+        day_range = max(high_price - low_price, 0.0)
+        if day_range > 0:
+            result.close_position_pct = round((close_price - low_price) / day_range * 100, 2)
+            result.upper_shadow_pct = round((high_price - max(open_price, close_price)) / close_price * 100, 2)
+            result.lower_shadow_pct = round((min(open_price, close_price) - low_price) / close_price * 100, 2)
+
+        gap_pct = 0.0
+        if prev_close > 0 and open_price > 0:
+            gap_pct = (open_price - prev_close) / prev_close * 100
+
+        if gap_pct >= 2.0 and close_price < open_price and result.close_position_pct <= 35:
+            result.intraday_pattern = "高开低走"
+        elif gap_pct <= -2.0 and close_price > open_price and result.close_position_pct >= 65:
+            result.intraday_pattern = "低开高走"
+        elif close_price > open_price and result.close_position_pct >= 70:
+            result.intraday_pattern = "强势收高"
+        elif close_price < open_price and result.close_position_pct <= 30:
+            result.intraday_pattern = "弱势收低"
+        else:
+            result.intraday_pattern = "日内震荡"
+
+        result.weak_close = close_price < open_price and result.close_position_pct <= 25
+
+        if prev_close > 0:
+            limit_ratio = self._resolve_cn_limit_ratio(result.code)
+            result.limit_up_price = np.floor(prev_close * (1 + limit_ratio) * 100 + 0.5) / 100.0
+            result.limit_down_price = np.floor(prev_close * (1 - limit_ratio) * 100 + 0.5) / 100.0
+            if result.limit_up_price > 0:
+                result.distance_to_limit_up_pct = round((result.limit_up_price - close_price) / close_price * 100, 2)
+                result.near_limit_up = result.distance_to_limit_up_pct <= 1.0
+            if result.limit_down_price > 0:
+                result.distance_to_limit_down_pct = round((close_price - result.limit_down_price) / close_price * 100, 2)
+                result.near_limit_down = result.distance_to_limit_down_pct <= 1.0
+
+    @staticmethod
+    def _resolve_cn_limit_ratio(code: str) -> float:
+        """Approximate A-share daily limit ratio from stock-code prefixes."""
+        normalized = str(code or "").strip().upper()
+        if normalized.startswith(("300", "301", "688", "689")):
+            return 0.20
+        if normalized.startswith(("8", "4")):
+            return 0.30
+        return 0.10
 
     def _analyze_macd(self, df: pd.DataFrame, result: TrendAnalysisResult) -> None:
         """
@@ -678,6 +875,48 @@ class StockTrendAnalyzer:
         elif result.volume_status == VolumeStatus.HEAVY_VOLUME_DOWN:
             risks.append("⚠️ 放量下跌，注意风险")
 
+        # === A-share structure overlays ===
+        if result.intraday_pattern == "低开高走":
+            score += 4
+            reasons.append("✅ 日内低开高走，承接较强")
+        elif result.intraday_pattern == "强势收高":
+            score += 3
+            reasons.append("✅ 收盘靠近日内高位，资金承接尚可")
+        elif result.intraday_pattern == "高开低走":
+            score -= 5
+            risks.append("⚠️ 高开低走，日内抛压偏重")
+        elif result.weak_close:
+            score -= 4
+            risks.append("⚠️ 收盘靠近日内低位，尾盘承接偏弱")
+
+        if result.upper_shadow_pct >= 3:
+            score -= 2
+            risks.append(f"⚠️ 上影线偏长({result.upper_shadow_pct:.1f}%)，上方抛压存在")
+
+        if result.near_limit_up:
+            score += 2
+            reasons.append("⚡ 股价接近涨停价，情绪强度较高")
+        if result.near_limit_down:
+            score -= 6
+            risks.append("❌ 股价接近跌停价，短线风险较高")
+
+        # === 多周期共振校准 ===
+        if result.timeframe_resonance == "周日共振偏多":
+            score += 6
+            reasons.append("✅ 周线与日线方向一致，趋势共振较好")
+        elif result.timeframe_resonance == "周强日整":
+            score += 2
+            reasons.append("⚡ 周线偏强，日线处于整理等待确认")
+        elif result.timeframe_resonance == "日线反弹，周线未确认":
+            score -= 4
+            risks.append("⚠️ 日线更像反弹，周线尚未同步转强")
+        elif result.timeframe_resonance == "周日共振偏空":
+            score -= 8
+            risks.append("❌ 周线与日线同步走弱，逆势交易风险高")
+        elif result.timeframe_resonance == "周日分歧":
+            score -= 2
+            risks.append("⚠️ 周期方向不一致，宜降低仓位等待确认")
+
         # === 支撑评分（10分）===
         if result.support_ma5:
             score += 5
@@ -759,12 +998,18 @@ class StockTrendAnalyzer:
             f"📊 趋势判断: {result.trend_status.value}",
             f"   均线排列: {result.ma_alignment}",
             f"   趋势强度: {result.trend_strength}/100",
+            f"   周线趋势: {result.weekly_trend_status or 'N/A'}",
+            f"   周线结构: {result.weekly_ma_alignment or 'N/A'}",
+            f"   周期共振: {result.timeframe_resonance or 'N/A'}",
+            f"   操作倾向: {result.timeframe_action_bias or 'N/A'}",
             f"",
             f"📈 均线数据:",
             f"   现价: {result.current_price:.2f}",
             f"   MA5:  {result.ma5:.2f} (乖离 {result.bias_ma5:+.2f}%)",
             f"   MA10: {result.ma10:.2f} (乖离 {result.bias_ma10:+.2f}%)",
             f"   MA20: {result.ma20:.2f} (乖离 {result.bias_ma20:+.2f}%)",
+            f"   周线MA5位置: {result.weekly_bias_ma5:+.2f}%",
+            f"   周线MA10位置: {result.weekly_bias_ma10:+.2f}%",
             f"",
             f"📊 量能分析: {result.volume_status.value}",
             f"   量比(vs5日): {result.volume_ratio_5d:.2f}",

@@ -32,6 +32,11 @@ export interface ReportMeta {
   createdAt: string;
   currentPrice?: number;
   changePct?: number;
+  marketDataDate?: string;
+  latestDataDate?: string;
+  dataIsStale?: boolean;
+  dataAgeDays?: number;
+  dataFreshnessNote?: string;
   modelUsed?: string;  // LLM model used for analysis
 }
 

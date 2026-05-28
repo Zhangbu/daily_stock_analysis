@@ -121,6 +121,11 @@ class ReportMeta(BaseModel):
     created_at: Optional[str] = Field(None, description="创建时间")
     current_price: Optional[float] = Field(None, description="分析时股价")
     change_pct: Optional[float] = Field(None, description="分析时涨跌幅(%)")
+    market_data_date: Optional[str] = Field(None, description="该报告使用的行情日期")
+    latest_data_date: Optional[str] = Field(None, description="当前本地行情库中的最新日期")
+    data_is_stale: Optional[bool] = Field(None, description="报告使用的行情是否落后于本地最新行情")
+    data_age_days: Optional[int] = Field(None, description="报告行情日期落后于本地最新行情的天数")
+    data_freshness_note: Optional[str] = Field(None, description="行情日期说明")
     model_used: Optional[str] = Field(None, description="分析使用的 LLM 模型")
 
 
@@ -156,6 +161,7 @@ class ReportDetails(BaseModel):
     dividend_metrics: Optional[Any] = Field(None, description="结构化分红指标（含 TTM 口径）")
     belong_boards: Optional[Any] = Field(None, description="关联板块列表")
     sector_rankings: Optional[Any] = Field(None, description="板块涨跌榜（结构 {top, bottom}）")
+    a_share_signal_tags: Optional[Any] = Field(None, description="从分析快照提取的 A 股结构化信号标签")
 
 
 class AnalysisReport(BaseModel):

@@ -103,7 +103,7 @@ class BacktestRepository:
         days: Optional[int],
         offset: int,
         limit: int,
-    ) -> Tuple[List[Tuple[BacktestResult, Optional[str], Optional[str], Optional[datetime]]], int]:
+    ) -> Tuple[List[Tuple[BacktestResult, Optional[str], Optional[str], Optional[datetime], Optional[str]]], int]:
         with self.db.get_session() as session:
             conditions = self._build_result_conditions(
                 code=code,
@@ -128,6 +128,7 @@ class BacktestRepository:
                     AnalysisHistory.name,
                     AnalysisHistory.trend_prediction,
                     AnalysisHistory.created_at,
+                    AnalysisHistory.context_snapshot,
                 )
                 .join(AnalysisHistory, AnalysisHistory.id == BacktestResult.analysis_history_id)
                 .where(where_clause)

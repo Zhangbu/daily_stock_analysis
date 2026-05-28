@@ -15,6 +15,7 @@ from src.core.backtest_engine import OVERALL_SENTINEL_CODE, BacktestEngine, Eval
 from src.repositories.backtest_repo import BacktestRepository
 from src.repositories.stock_repo import StockRepository
 from src.storage import BacktestResult, BacktestSummary, DatabaseManager
+from src.utils.a_share_signal_tags import derive_a_share_signal_tags
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +250,10 @@ class BacktestService:
             offset=offset,
             limit=limit,
         )
-        items = [self._result_to_dict(result, stock_name, trend_prediction) for result, stock_name, trend_prediction, _ in rows]
+        items = [
+            self._result_to_dict(result, stock_name, trend_prediction, context_snapshot)
+            for result, stock_name, trend_prediction, _, context_snapshot in rows
+        ]
         return {"total": total, "page": page, "limit": limit, "items": items}
 
     def get_summary(
@@ -438,7 +442,9 @@ class BacktestService:
         row: BacktestResult,
         stock_name: Optional[str] = None,
         trend_prediction: Optional[str] = None,
+        context_snapshot: Optional[str] = None,
     ) -> Dict[str, Any]:
+        signal_tags = derive_a_share_signal_tags(context_snapshot)
         return {
             "analysis_history_id": row.analysis_history_id,
             "code": row.code,
@@ -472,6 +478,7 @@ class BacktestService:
             "simulated_exit_price": row.simulated_exit_price,
             "simulated_exit_reason": row.simulated_exit_reason,
             "simulated_return_pct": row.simulated_return_pct,
+            "a_share_signal_tags": signal_tags,
         }
 
     @staticmethod

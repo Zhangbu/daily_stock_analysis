@@ -402,6 +402,77 @@ class BacktestSummary(Base):
     )
 
 
+class ProfileBacktestResult(Base):
+    """Persisted signal-level backtest result for profile strategies."""
+
+    __tablename__ = 'profile_backtest_results'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    profile_name = Column(String(32), nullable=False, index=True)
+    strategy_name = Column(String(64), nullable=False, index=True)
+    code = Column(String(16), nullable=False, index=True)
+    stock_name = Column(String(64))
+    analysis_date = Column(Date, nullable=False, index=True)
+    entry_date = Column(Date, nullable=False, index=True)
+    exit_date = Column(Date, nullable=False, index=True)
+    eval_window_days = Column(Integer, nullable=False, default=10, index=True)
+    score = Column(Integer, nullable=False)
+    grade = Column(String(8), nullable=False)
+    verdict = Column(String(255))
+    entry_price = Column(Float)
+    exit_price = Column(Float)
+    max_return_pct = Column(Float)
+    min_return_pct = Column(Float)
+    window_return_pct = Column(Float)
+    outcome = Column(String(16), nullable=False, default='neutral')
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'profile_name',
+            'strategy_name',
+            'code',
+            'analysis_date',
+            'eval_window_days',
+            name='uix_profile_backtest_signal',
+        ),
+        Index('ix_profile_backtest_query', 'profile_name', 'strategy_name', 'analysis_date'),
+    )
+
+
+class ProfileBacktestSummary(Base):
+    """Persisted summary for one profile strategy backtest run."""
+
+    __tablename__ = 'profile_backtest_summaries'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    profile_name = Column(String(32), nullable=False, index=True)
+    strategy_name = Column(String(64), nullable=False, index=True)
+    eval_window_days = Column(Integer, nullable=False, default=10, index=True)
+    total_signals = Column(Integer, default=0)
+    wins = Column(Integer, default=0)
+    losses = Column(Integer, default=0)
+    neutrals = Column(Integer, default=0)
+    win_rate_pct = Column(Float)
+    avg_return_pct = Column(Float)
+    avg_max_return_pct = Column(Float)
+    avg_min_return_pct = Column(Float)
+    by_code_json = Column(Text)
+    computed_at = Column(DateTime, default=datetime.now, index=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'profile_name',
+            'strategy_name',
+            'eval_window_days',
+            name='uix_profile_backtest_summary',
+        ),
+    )
+
+
 class PortfolioAccount(Base):
     """Portfolio account metadata."""
 
@@ -1480,6 +1551,26 @@ class DatabaseManager:
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'])
         return df
+
+    def get_latest_daily_date(
+        self,
+        code: str,
+        market: Optional[str] = None,
+        interval: str = "1d",
+    ) -> Optional[date]:
+        """
+        Return the latest available stock_daily date for one symbol.
+        """
+        conditions = [StockDaily.code == code]
+        if market:
+            conditions.append(StockDaily.market == market)
+        if interval:
+            conditions.append(StockDaily.interval == interval)
+
+        with self.get_session() as session:
+            return session.execute(
+                select(func.max(StockDaily.date)).where(and_(*conditions))
+            ).scalar_one_or_none()
     
     def save_daily_data(
         self, 

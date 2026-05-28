@@ -7,6 +7,7 @@ import type {
   BacktestResultItem,
   PerformanceMetrics,
   ProfileBacktestRunRequest,
+  ProfileBacktestResultsResponse,
   ProfileBacktestRunResponse,
 } from '../types/backtest';
 
@@ -47,6 +48,63 @@ export const backtestApi = {
       requestData,
     );
     return toCamelCase<ProfileBacktestRunResponse>(response.data);
+  },
+
+  getProfileResults: async (params: {
+    profileName: string;
+    strategyName: string;
+    code?: string;
+    outcome?: 'win' | 'loss' | 'neutral';
+    evalWindowDays?: number;
+    analysisDateFrom?: string;
+    analysisDateTo?: string;
+    sortBy?: 'analysis_date' | 'score' | 'window_return_pct' | 'max_return_pct' | 'min_return_pct';
+    sortOrder?: 'asc' | 'desc';
+    page?: number;
+    limit?: number;
+  }): Promise<ProfileBacktestResultsResponse> => {
+    const queryParams: Record<string, string | number> = {
+      profile_name: params.profileName,
+      strategy_name: params.strategyName,
+      page: params.page ?? 1,
+      limit: params.limit ?? 20,
+    };
+    if (params.code) queryParams.code = params.code;
+    if (params.outcome) queryParams.outcome = params.outcome;
+    if (params.evalWindowDays) queryParams.eval_window_days = params.evalWindowDays;
+    if (params.analysisDateFrom) queryParams.analysis_date_from = params.analysisDateFrom;
+    if (params.analysisDateTo) queryParams.analysis_date_to = params.analysisDateTo;
+    if (params.sortBy) queryParams.sort_by = params.sortBy;
+    if (params.sortOrder) queryParams.sort_order = params.sortOrder;
+
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/backtest/profile/results', {
+      params: queryParams,
+    });
+    return toCamelCase<ProfileBacktestResultsResponse>(response.data);
+  },
+
+  getProfileSummary: async (params: {
+    profileName: string;
+    strategyName: string;
+    evalWindowDays?: number;
+  }): Promise<ProfileBacktestRunResponse['summary'] | null> => {
+    try {
+      const queryParams: Record<string, string | number> = {
+        profile_name: params.profileName,
+        strategy_name: params.strategyName,
+      };
+      if (params.evalWindowDays) queryParams.eval_window_days = params.evalWindowDays;
+      const response = await apiClient.get<Record<string, unknown>>('/api/v1/backtest/profile/summary', {
+        params: queryParams,
+      });
+      return toCamelCase<ProfileBacktestRunResponse['summary']>(response.data);
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'response' in err) {
+        const axiosErr = err as { response?: { status?: number } };
+        if (axiosErr.response?.status === 404) return null;
+      }
+      throw err;
+    }
   },
 
   /**

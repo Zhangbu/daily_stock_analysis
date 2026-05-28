@@ -85,6 +85,31 @@ _CUSTOM_MODEL_PRICING: Dict[str, dict] = {
         "input_cost_per_token": 0.0000003,   # $0.3 / 1M tokens
         "output_cost_per_token": 0.0000012,   # $1.2 / 1M tokens
     },
+    # NVIDIA NIM / integrate.api.nvidia.com exposes upstream model IDs such as
+    # z-ai/glm-5.1 through an OpenAI-compatible API. LiteLLM may not ship price
+    # metadata for these wire-level model IDs, which triggers noisy
+    # response_cost_failure_debug_information logs even when inference succeeds.
+    # We register a placeholder zero-cost entry here to suppress that noise.
+    "z-ai/glm-5.1": {
+        "supports_function_calling": True,
+        "supports_vision": True,
+        "supports_audio_input": False,
+        "supports_audio_output": False,
+        "context_window": 131072,
+        "max_tokens": 16384,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    },
+    "openai/z-ai/glm-5.1": {
+        "supports_function_calling": True,
+        "supports_vision": True,
+        "supports_audio_input": False,
+        "supports_audio_output": False,
+        "context_window": 131072,
+        "max_tokens": 16384,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    },
 }
 
 

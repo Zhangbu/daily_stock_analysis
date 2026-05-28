@@ -77,6 +77,15 @@ export interface ProfileBacktestRunResponse {
   items: ProfileBacktestResultItem[];
 }
 
+export interface ProfileBacktestResultsResponse {
+  total: number;
+  page: number;
+  limit: number;
+  sortBy: 'analysis_date' | 'score' | 'window_return_pct' | 'max_return_pct' | 'min_return_pct';
+  sortOrder: 'asc' | 'desc';
+  items: ProfileBacktestResultItem[];
+}
+
 // ============ Result Item ============
 
 export interface BacktestResultItem {

@@ -25,7 +25,7 @@ import pandas as pd
 from src.config import get_config, Config
 from src.storage import get_db
 from data_provider import DataFetcherManager
-from data_provider.base import normalize_stock_code
+from data_provider.base import canonical_stock_code, normalize_stock_code
 from data_provider.realtime_types import ChipDistribution
 from src.analyzer import GeminiAnalyzer, AnalysisResult, fill_chip_structure_if_needed, fill_price_position_if_needed
 from src.data.stock_mapping import STOCK_NAME_MAP
@@ -37,6 +37,7 @@ from src.report_language import (
 )
 from src.search_service import SearchService
 from src.services.social_sentiment_service import SocialSentimentService
+from src.services.portfolio_service import PortfolioService
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from src.core.trading_calendar import (
@@ -153,6 +154,8 @@ class StockAnalysisPipeline:
                 exc_info=True,
             )
             self.social_sentiment_service = None
+        self.portfolio_service = PortfolioService()
+        self._portfolio_position_index: Optional[Dict[str, Dict[str, Any]]] = None
 
     def _emit_progress(self, progress: int, message: str) -> None:
         """Best-effort bridge from pipeline stages to task SSE progress."""
@@ -216,7 +219,7 @@ class StockAnalysisPipeline:
 
             # 从数据源获取数据
             logger.info(f"{stock_name}({code}) 开始从数据源获取数据...")
-            df, source_name = self.fetcher_manager.get_daily_data(code, days=30)
+            df, source_name = self.fetcher_manager.get_daily_data(code, days=400)
 
             if df is None or df.empty:
                 return False, "获取数据为空"
@@ -346,7 +349,7 @@ class StockAnalysisPipeline:
             try:
                 _mkt = get_market_for_stock(normalize_stock_code(code))
                 end_date = get_market_now(_mkt).date()
-                start_date = end_date - timedelta(days=89)  # ~60 trading days for MA60
+                start_date = end_date - timedelta(days=400)  # cover weekly MA20 + daily MA60
                 historical_bars = self.db.get_data_range(code, start_date, end_date)
                 if historical_bars:
                     df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
@@ -545,6 +548,25 @@ class StockAnalysisPipeline:
         """
         enhanced = context.copy()
         enhanced["report_language"] = normalize_report_language(getattr(self.config, "report_language", "zh"))
+        orig_today = dict(enhanced.get('today') or {})
+        orig_today_source = orig_today.get('data_source')
+        enhanced['today_eod'] = orig_today
+        enhanced['today_eod_meta'] = {
+            'source': orig_today_source,
+            'price_basis': '历史日K收盘口径',
+            'volume_basis': '历史日K收盘口径',
+            'amount_basis': '历史日K收盘口径',
+        }
+        enhanced['today_quote_basis'] = {
+            'mode': 'eod_only',
+            'price_basis': '历史日K收盘口径',
+            'volume_basis': '历史日K收盘口径',
+            'amount_basis': '历史日K收盘口径',
+            'amount_source': orig_today_source,
+        }
+        holding_context = self._get_portfolio_holding_context(context.get('code', ''))
+        if holding_context:
+            enhanced['portfolio_position'] = holding_context
         
         # 添加股票名称
         if stock_name:
@@ -559,6 +581,8 @@ class StockAnalysisPipeline:
         if realtime_quote:
             # 使用 getattr 安全获取字段，缺失字段返回 None 或默认值
             volume_ratio = getattr(realtime_quote, 'volume_ratio', None)
+            realtime_source = getattr(realtime_quote, 'source', None)
+            realtime_source_name = getattr(realtime_source, 'value', realtime_source)
             enhanced['realtime'] = {
                 'name': getattr(realtime_quote, 'name', ''),
                 'price': getattr(realtime_quote, 'price', None),
@@ -571,7 +595,7 @@ class StockAnalysisPipeline:
                 'total_mv': getattr(realtime_quote, 'total_mv', None),
                 'circ_mv': getattr(realtime_quote, 'circ_mv', None),
                 'change_60d': getattr(realtime_quote, 'change_60d', None),
-                'source': getattr(realtime_quote, 'source', None),
+                'source': realtime_source_name,
             }
             # 移除 None 值以减少上下文大小
             enhanced['realtime'] = {k: v for k, v in enhanced['realtime'].items() if v is not None}
@@ -593,6 +617,13 @@ class StockAnalysisPipeline:
                 'trend_status': trend_result.trend_status.value,
                 'ma_alignment': trend_result.ma_alignment,
                 'trend_strength': trend_result.trend_strength,
+                'weekly_trend_status': trend_result.weekly_trend_status,
+                'weekly_ma_alignment': trend_result.weekly_ma_alignment,
+                'weekly_trend_strength': trend_result.weekly_trend_strength,
+                'weekly_bias_ma5': trend_result.weekly_bias_ma5,
+                'weekly_bias_ma10': trend_result.weekly_bias_ma10,
+                'timeframe_resonance': trend_result.timeframe_resonance,
+                'timeframe_action_bias': trend_result.timeframe_action_bias,
                 'bias_ma5': trend_result.bias_ma5,
                 'bias_ma10': trend_result.bias_ma10,
                 'volume_status': trend_result.volume_status.value,
@@ -601,6 +632,15 @@ class StockAnalysisPipeline:
                 'signal_score': trend_result.signal_score,
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
+                'intraday_pattern': trend_result.intraday_pattern,
+                'close_position_pct': trend_result.close_position_pct,
+                'upper_shadow_pct': trend_result.upper_shadow_pct,
+                'lower_shadow_pct': trend_result.lower_shadow_pct,
+                'distance_to_limit_up_pct': trend_result.distance_to_limit_up_pct,
+                'distance_to_limit_down_pct': trend_result.distance_to_limit_down_pct,
+                'near_limit_up': trend_result.near_limit_up,
+                'near_limit_down': trend_result.near_limit_down,
+                'weak_close': trend_result.weak_close,
             }
 
         # Issue #234: Override today with realtime OHLC + trend MA for intraday analysis
@@ -608,6 +648,8 @@ class StockAnalysisPipeline:
         if realtime_quote and trend_result and trend_result.ma5 > 0:
             price = getattr(realtime_quote, 'price', None)
             if price is not None and price > 0:
+                realtime_source = getattr(realtime_quote, 'source', None)
+                realtime_source_name = getattr(realtime_source, 'value', realtime_source)
                 yesterday_close = None
                 if enhanced.get('yesterday') and isinstance(enhanced['yesterday'], dict):
                     yesterday_close = enhanced['yesterday'].get('close')
@@ -639,6 +681,27 @@ class StockAnalysisPipeline:
                     if k not in realtime_today and v is not None:
                         realtime_today[k] = v
                 enhanced['today'] = realtime_today
+                enhanced['today_realtime'] = {
+                    'close': price,
+                    'open': open_p,
+                    'high': high_p,
+                    'low': low_p,
+                    'volume': vol,
+                    'amount': amt,
+                    'pct_chg': pct,
+                    'source': realtime_source_name,
+                    'price_basis': '盘中实时行情',
+                    'volume_basis': '盘中实时成交量',
+                    'amount_basis': '盘中实时成交额',
+                }
+                enhanced['today_quote_basis'] = {
+                    'mode': 'realtime_overlay',
+                    'price_basis': '盘中实时行情',
+                    'volume_basis': '盘中实时成交量',
+                    'amount_basis': '盘中实时成交额',
+                    'amount_source': realtime_source_name,
+                    'eod_amount_source': (enhanced.get('today_eod_meta') or {}).get('source'),
+                }
                 enhanced['ma_status'] = self._compute_ma_status(
                     price, trend_result.ma5, trend_result.ma10, trend_result.ma20
                 )
@@ -667,6 +730,9 @@ class StockAnalysisPipeline:
                                 )
                         except (TypeError, ValueError):
                             pass
+                portfolio_position = enhanced.get('portfolio_position')
+                if isinstance(portfolio_position, dict):
+                    self._augment_portfolio_holding_context(portfolio_position, current_price=price)
 
         # ETF/index flag for analyzer prompt (Fixes #274)
         enhanced['is_index_etf'] = SearchService.is_index_or_etf(
@@ -684,6 +750,102 @@ class StockAnalysisPipeline:
         )
 
         return enhanced
+
+    def _get_portfolio_holding_context(self, code: str) -> Optional[Dict[str, Any]]:
+        """Return current holding context for one symbol from cached portfolio snapshot."""
+        symbol = canonical_stock_code(code or '')
+        if not symbol:
+            return None
+        if self._portfolio_position_index is None:
+            self._portfolio_position_index = self._build_portfolio_position_index()
+        position = self._portfolio_position_index.get(symbol)
+        if not position:
+            return None
+        return dict(position)
+
+    def _build_portfolio_position_index(self) -> Dict[str, Dict[str, Any]]:
+        """Build one lookup table for all current held symbols across active accounts."""
+        index: Dict[str, Dict[str, Any]] = {}
+        try:
+            snapshot = self.portfolio_service.get_portfolio_snapshot()
+        except Exception as exc:
+            logger.warning("组合持仓快照获取失败，分析链将跳过持仓增强: %s", exc)
+            return index
+
+        for account in snapshot.get('accounts') or []:
+            account_id = account.get('account_id')
+            account_name = account.get('account_name')
+            base_currency = account.get('base_currency')
+            for position in account.get('positions') or []:
+                symbol = canonical_stock_code(position.get('symbol') or '')
+                quantity = float(position.get('quantity') or 0.0)
+                if not symbol or quantity <= 0:
+                    continue
+                entry = index.setdefault(symbol, {
+                    'symbol': symbol,
+                    'is_holding': True,
+                    'account_count': 0,
+                    'accounts': [],
+                    'total_quantity': 0.0,
+                    'weighted_avg_cost': 0.0,
+                    'cost_weight_sum': 0.0,
+                    'market': position.get('market'),
+                    'valuation_currency': base_currency,
+                    'total_market_value_base': 0.0,
+                    'total_unrealized_pnl_base': 0.0,
+                    'mixed_base_currency': False,
+                })
+                if entry.get('valuation_currency') and base_currency and entry['valuation_currency'] != base_currency:
+                    entry['mixed_base_currency'] = True
+                entry['account_count'] += 1
+                entry['total_quantity'] += quantity
+                entry['cost_weight_sum'] += quantity * float(position.get('avg_cost') or 0.0)
+                entry['total_market_value_base'] += float(position.get('market_value_base') or 0.0)
+                entry['total_unrealized_pnl_base'] += float(position.get('unrealized_pnl_base') or 0.0)
+                entry['accounts'].append({
+                    'account_id': account_id,
+                    'account_name': account_name,
+                    'market': position.get('market'),
+                    'quantity': quantity,
+                    'avg_cost': float(position.get('avg_cost') or 0.0),
+                    'market_value_base': float(position.get('market_value_base') or 0.0),
+                    'unrealized_pnl_base': float(position.get('unrealized_pnl_base') or 0.0),
+                    'valuation_currency': base_currency,
+                })
+
+        for entry in index.values():
+            total_quantity = float(entry.get('total_quantity') or 0.0)
+            entry['weighted_avg_cost'] = round((entry.get('cost_weight_sum') or 0.0) / total_quantity, 4) if total_quantity > 0 else 0.0
+            entry['total_quantity'] = round(total_quantity, 8)
+            entry['total_market_value_base'] = round(float(entry.get('total_market_value_base') or 0.0), 4)
+            entry['total_unrealized_pnl_base'] = round(float(entry.get('total_unrealized_pnl_base') or 0.0), 4)
+            if entry.get('mixed_base_currency'):
+                entry['valuation_currency'] = None
+            entry.pop('cost_weight_sum', None)
+
+        return index
+
+    @staticmethod
+    def _augment_portfolio_holding_context(position: Dict[str, Any], *, current_price: Optional[float]) -> None:
+        """Attach current-vs-cost metrics used for more actionable holding advice."""
+        if current_price is None or current_price <= 0:
+            return
+        avg_cost = float(position.get('weighted_avg_cost') or 0.0)
+        if avg_cost <= 0:
+            return
+        pnl_pct = (float(current_price) - avg_cost) / avg_cost * 100
+        position['current_price_ref'] = round(float(current_price), 4)
+        position['vs_cost_pct'] = round(pnl_pct, 2)
+        if pnl_pct >= 15:
+            position['holding_status'] = '明显盈利'
+        elif pnl_pct >= 3:
+            position['holding_status'] = '小幅盈利'
+        elif pnl_pct > -3:
+            position['holding_status'] = '成本附近震荡'
+        elif pnl_pct > -10:
+            position['holding_status'] = '小幅浮亏'
+        else:
+            position['holding_status'] = '明显浮亏'
 
     def _attach_belong_boards_to_fundamental_context(
         self,
@@ -1103,9 +1265,17 @@ class StockAnalysisPipeline:
         code: str, current_time: Optional[datetime] = None
     ) -> date:
         """
-        Resolve the trading date used by checkpoint/resume checks.
+        Resolve the target date used by checkpoint/resume checks.
+
+        For analysis refresh we prefer the market-local natural date on trading
+        days, so intraday runs can still attempt to pull same-day bars instead
+        of stopping at the previous completed session.
         """
         market = get_market_for_stock(normalize_stock_code(code))
+        market_now = get_market_now(market, current_time=current_time)
+        local_date = market_now.date()
+        if market and is_market_open(market, local_date):
+            return local_date
         return get_effective_trading_date(market, current_time=current_time)
 
     @staticmethod

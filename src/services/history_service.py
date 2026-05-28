@@ -28,12 +28,29 @@ from src.report_language import (
     normalize_report_language,
 )
 from src.storage import DatabaseManager
+from src.utils.a_share_signal_tags import derive_a_share_signal_tags
 from src.utils.data_processing import normalize_model_used, parse_json_field
 
 if TYPE_CHECKING:
     from src.analyzer import AnalysisResult
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_iso_date(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).date().isoformat()
+    except ValueError:
+        return text[:10] if len(text) >= 10 else text
 
 
 class MarkdownReportGenerationError(Exception):
@@ -266,6 +283,12 @@ class HistoryService:
                 context_snapshot = json.loads(record.context_snapshot)
             except json.JSONDecodeError:
                 context_snapshot = record.context_snapshot
+        a_share_signal_tags = derive_a_share_signal_tags(context_snapshot)
+        market_data_meta = self._build_market_data_meta(
+            code=record.code,
+            context_snapshot=context_snapshot,
+            report_created_at=record.created_at,
+        )
 
         return {
             "id": record.id,
@@ -274,6 +297,11 @@ class HistoryService:
             "stock_name": record.name,
             "report_type": record.report_type,
             "created_at": record.created_at.isoformat() if record.created_at else None,
+            "market_data_date": market_data_meta.get("market_data_date"),
+            "latest_data_date": market_data_meta.get("latest_data_date"),
+            "data_is_stale": market_data_meta.get("data_is_stale"),
+            "data_age_days": market_data_meta.get("data_age_days"),
+            "data_freshness_note": market_data_meta.get("data_freshness_note"),
             "model_used": model_used,
             "analysis_summary": record.analysis_summary,
             "operation_advice": record.operation_advice,
@@ -287,6 +315,85 @@ class HistoryService:
             "news_content": record.news_content,
             "raw_result": raw_result,
             "context_snapshot": context_snapshot,
+            "a_share_signal_tags": a_share_signal_tags,
+        }
+
+    def _build_market_data_meta(
+        self,
+        *,
+        code: str,
+        context_snapshot: Any,
+        report_created_at: Optional[datetime],
+    ) -> Dict[str, Any]:
+        if not isinstance(context_snapshot, dict):
+            return {}
+
+        enhanced_context = context_snapshot.get("enhanced_context") or {}
+        if not isinstance(enhanced_context, dict):
+            enhanced_context = {}
+
+        today = enhanced_context.get("today") or {}
+        today_eod = enhanced_context.get("today_eod") or {}
+        today_quote_basis = enhanced_context.get("today_quote_basis") or {}
+
+        market = None
+        interval = "1d"
+        for candidate in (today, today_eod):
+            if isinstance(candidate, dict):
+                market = market or candidate.get("market")
+                interval = candidate.get("interval") or interval
+
+        market_data_date = None
+        for candidate in (
+            today_eod.get("date") if isinstance(today_eod, dict) else None,
+            today.get("date") if isinstance(today, dict) else None,
+        ):
+            market_data_date = _coerce_iso_date(candidate)
+            if market_data_date:
+                break
+
+        latest_daily_date = self.db.get_latest_daily_date(
+            code=code,
+            market=market,
+            interval=interval,
+        )
+        latest_data_date = latest_daily_date.isoformat() if latest_daily_date else None
+
+        data_is_stale = False
+        data_age_days: Optional[int] = None
+        if market_data_date and latest_data_date:
+            try:
+                report_date = date.fromisoformat(market_data_date)
+                latest_date = date.fromisoformat(latest_data_date)
+                data_age_days = max(0, (latest_date - report_date).days)
+                data_is_stale = latest_date > report_date
+            except ValueError:
+                data_age_days = None
+
+        mode = ""
+        if isinstance(today_quote_basis, dict):
+            mode = str(today_quote_basis.get("mode") or "").strip()
+
+        freshness_note = None
+        if market_data_date and latest_data_date and data_is_stale:
+            freshness_note = (
+                f"该报告基于 {market_data_date} 的行情生成，当前本地最新日K已更新到 {latest_data_date}。"
+            )
+        elif market_data_date and mode == "realtime_overlay":
+            freshness_note = (
+                f"该报告展示了盘中实时覆盖视图，最近收盘口径行情日期为 {market_data_date}。"
+            )
+        elif market_data_date and report_created_at:
+            freshness_note = (
+                f"该报告基于 {market_data_date} 的行情生成，报告时间为 {report_created_at.date().isoformat()}。"
+            )
+
+        return {
+            "market_data_date": market_data_date,
+            "latest_data_date": latest_data_date,
+            "data_is_stale": data_is_stale,
+            "data_age_days": data_age_days,
+            "data_freshness_note": freshness_note,
         }
 
     def delete_history_records(self, record_ids: List[int]) -> int:

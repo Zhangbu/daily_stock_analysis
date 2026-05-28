@@ -8,12 +8,16 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Dict, List, Literal, Optional
 
 import pandas as pd
+from sqlalchemy import and_, asc, delete, desc, func, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from src.services.profile_stock_metadata import get_profile_stock_metadata
 from src.services.profile_strategy_service import ProfileStrategyService
+from src.storage import ProfileBacktestResult, ProfileBacktestSummary, get_db
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +46,7 @@ class ProfileStrategyBacktestService:
 
     def __init__(self, profile_name: str, strategy_name: str):
         self.profile_service = ProfileStrategyService(profile_name=profile_name, strategy_name=strategy_name)
+        self.db = get_db()
         self.neutral_band_pct = 1.0
         self.warmup_bars = 60
 
@@ -76,6 +81,7 @@ class ProfileStrategyBacktestService:
 
         items.sort(key=lambda item: (item.analysis_date, item.score), reverse=True)
         summary = self._build_summary(items, eval_window_days)
+        self._persist_results(items, summary, eval_window_days)
 
         return {
             "profile_name": self.profile_service.profile.name,
@@ -84,6 +90,138 @@ class ProfileStrategyBacktestService:
             "eval_window_days": eval_window_days,
             "items": items,
             "summary": summary,
+        }
+
+    def get_persisted_results(
+        self,
+        *,
+        analysis_date_from: Optional[date] = None,
+        analysis_date_to: Optional[date] = None,
+        code: Optional[str] = None,
+        outcome: Optional[Literal["win", "loss", "neutral"]] = None,
+        eval_window_days: Optional[int] = None,
+        page: int = 1,
+        limit: int = 50,
+        sort_by: Literal["analysis_date", "score", "window_return_pct", "max_return_pct", "min_return_pct"] = "analysis_date",
+        sort_order: Literal["asc", "desc"] = "desc",
+    ) -> Dict[str, object]:
+        sort_column_map = {
+            "analysis_date": ProfileBacktestResult.analysis_date,
+            "score": ProfileBacktestResult.score,
+            "window_return_pct": ProfileBacktestResult.window_return_pct,
+            "max_return_pct": ProfileBacktestResult.max_return_pct,
+            "min_return_pct": ProfileBacktestResult.min_return_pct,
+        }
+        if sort_by not in sort_column_map:
+            raise ValueError(f"unsupported sort_by: {sort_by}")
+        if sort_order not in {"asc", "desc"}:
+            raise ValueError(f"unsupported sort_order: {sort_order}")
+
+        conditions = [
+            ProfileBacktestResult.profile_name == self.profile_service.profile.name,
+            ProfileBacktestResult.strategy_name == self.profile_service.strategy.name,
+        ]
+        if code:
+            conditions.append(ProfileBacktestResult.code == code.upper())
+        if outcome:
+            conditions.append(ProfileBacktestResult.outcome == outcome)
+        if eval_window_days is not None:
+            conditions.append(ProfileBacktestResult.eval_window_days == int(eval_window_days))
+        if analysis_date_from is not None:
+            conditions.append(ProfileBacktestResult.analysis_date >= analysis_date_from)
+        if analysis_date_to is not None:
+            conditions.append(ProfileBacktestResult.analysis_date <= analysis_date_to)
+
+        offset = max(page - 1, 0) * limit
+        primary_order = sort_column_map[sort_by]
+        secondary_order = ProfileBacktestResult.analysis_date
+        tertiary_order = ProfileBacktestResult.score
+        order_fn = desc if sort_order == "desc" else asc
+
+        with self.db.get_session() as session:
+            total = session.execute(
+                select(func.count(ProfileBacktestResult.id)).where(and_(*conditions))
+            ).scalar() or 0
+            rows = session.execute(
+                select(ProfileBacktestResult)
+                .where(and_(*conditions))
+                .order_by(
+                    order_fn(primary_order),
+                    order_fn(secondary_order),
+                    order_fn(tertiary_order),
+                )
+                .offset(offset)
+                .limit(limit)
+            ).scalars().all()
+
+        items = [
+            ProfileBacktestItem(
+                code=row.code,
+                stock_name=row.stock_name or row.code,
+                analysis_date=row.analysis_date,
+                entry_date=row.entry_date,
+                exit_date=row.exit_date,
+                score=int(row.score or 0),
+                grade=row.grade,
+                verdict=row.verdict or "",
+                entry_price=float(row.entry_price or 0),
+                exit_price=float(row.exit_price or 0),
+                max_return_pct=float(row.max_return_pct or 0),
+                min_return_pct=float(row.min_return_pct or 0),
+                window_return_pct=float(row.window_return_pct or 0),
+                outcome=row.outcome,
+            )
+            for row in rows
+        ]
+        return {
+            "total": int(total),
+            "page": page,
+            "limit": limit,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+            "items": items,
+        }
+
+    def get_persisted_summary(self, *, eval_window_days: Optional[int] = None) -> Optional[Dict[str, object]]:
+        conditions = [
+            ProfileBacktestSummary.profile_name == self.profile_service.profile.name,
+            ProfileBacktestSummary.strategy_name == self.profile_service.strategy.name,
+        ]
+        if eval_window_days is not None:
+            conditions.append(ProfileBacktestSummary.eval_window_days == int(eval_window_days))
+
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(ProfileBacktestSummary)
+                .where(and_(*conditions))
+                .order_by(desc(ProfileBacktestSummary.computed_at))
+                .limit(1)
+            ).scalar_one_or_none()
+
+        if row is None:
+            return None
+
+        by_code = {}
+        if row.by_code_json:
+            try:
+                import json
+                parsed = json.loads(row.by_code_json)
+                if isinstance(parsed, dict):
+                    by_code = parsed
+            except Exception:
+                by_code = {}
+
+        return {
+            "total_signals": row.total_signals,
+            "wins": row.wins,
+            "losses": row.losses,
+            "neutrals": row.neutrals,
+            "win_rate_pct": row.win_rate_pct,
+            "avg_return_pct": row.avg_return_pct,
+            "avg_max_return_pct": row.avg_max_return_pct,
+            "avg_min_return_pct": row.avg_min_return_pct,
+            "eval_window_days": row.eval_window_days,
+            "by_code": by_code,
         }
 
     def _run_single_code(
@@ -199,3 +337,117 @@ class ProfileStrategyBacktestService:
             "eval_window_days": eval_window_days,
             "by_code": by_code,
         }
+
+    def _persist_results(self, items: List[ProfileBacktestItem], summary: Dict[str, object], eval_window_days: int) -> None:
+        import json
+
+        now = datetime.now()
+        records = [
+            {
+                "profile_name": self.profile_service.profile.name,
+                "strategy_name": self.profile_service.strategy.name,
+                "code": item.code,
+                "stock_name": item.stock_name,
+                "analysis_date": item.analysis_date,
+                "entry_date": item.entry_date,
+                "exit_date": item.exit_date,
+                "eval_window_days": int(eval_window_days),
+                "score": item.score,
+                "grade": item.grade,
+                "verdict": item.verdict,
+                "entry_price": item.entry_price,
+                "exit_price": item.exit_price,
+                "max_return_pct": item.max_return_pct,
+                "min_return_pct": item.min_return_pct,
+                "window_return_pct": item.window_return_pct,
+                "outcome": item.outcome,
+                "created_at": now,
+                "updated_at": now,
+            }
+            for item in items
+        ]
+
+        def _write(session):
+            session.execute(
+                delete(ProfileBacktestResult).where(
+                    and_(
+                        ProfileBacktestResult.profile_name == self.profile_service.profile.name,
+                        ProfileBacktestResult.strategy_name == self.profile_service.strategy.name,
+                        ProfileBacktestResult.eval_window_days == int(eval_window_days),
+                    )
+                )
+            )
+            if records:
+                stmt = sqlite_insert(ProfileBacktestResult).values(records)
+                excluded = stmt.excluded
+                session.execute(
+                    stmt.on_conflict_do_update(
+                        index_elements=[
+                            "profile_name",
+                            "strategy_name",
+                            "code",
+                            "analysis_date",
+                            "eval_window_days",
+                        ],
+                        set_={
+                            "stock_name": excluded.stock_name,
+                            "entry_date": excluded.entry_date,
+                            "exit_date": excluded.exit_date,
+                            "score": excluded.score,
+                            "grade": excluded.grade,
+                            "verdict": excluded.verdict,
+                            "entry_price": excluded.entry_price,
+                            "exit_price": excluded.exit_price,
+                            "max_return_pct": excluded.max_return_pct,
+                            "min_return_pct": excluded.min_return_pct,
+                            "window_return_pct": excluded.window_return_pct,
+                            "outcome": excluded.outcome,
+                            "updated_at": excluded.updated_at,
+                        },
+                    )
+                )
+
+            summary_stmt = sqlite_insert(ProfileBacktestSummary).values(
+                {
+                    "profile_name": self.profile_service.profile.name,
+                    "strategy_name": self.profile_service.strategy.name,
+                    "eval_window_days": int(eval_window_days),
+                    "total_signals": int(summary["total_signals"]),
+                    "wins": int(summary["wins"]),
+                    "losses": int(summary["losses"]),
+                    "neutrals": int(summary["neutrals"]),
+                    "win_rate_pct": summary["win_rate_pct"],
+                    "avg_return_pct": summary["avg_return_pct"],
+                    "avg_max_return_pct": summary["avg_max_return_pct"],
+                    "avg_min_return_pct": summary["avg_min_return_pct"],
+                    "by_code_json": json.dumps(summary["by_code"], ensure_ascii=False),
+                    "computed_at": now,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+            excluded_summary = summary_stmt.excluded
+            session.execute(
+                summary_stmt.on_conflict_do_update(
+                    index_elements=["profile_name", "strategy_name", "eval_window_days"],
+                    set_={
+                        "total_signals": excluded_summary.total_signals,
+                        "wins": excluded_summary.wins,
+                        "losses": excluded_summary.losses,
+                        "neutrals": excluded_summary.neutrals,
+                        "win_rate_pct": excluded_summary.win_rate_pct,
+                        "avg_return_pct": excluded_summary.avg_return_pct,
+                        "avg_max_return_pct": excluded_summary.avg_max_return_pct,
+                        "avg_min_return_pct": excluded_summary.avg_min_return_pct,
+                        "by_code_json": excluded_summary.by_code_json,
+                        "computed_at": excluded_summary.computed_at,
+                        "updated_at": excluded_summary.updated_at,
+                    },
+                )
+            )
+            return None
+
+        self.db._run_write_transaction(
+            f"profile_backtest[{self.profile_service.profile.name}:{self.profile_service.strategy.name}]",
+            _write,
+        )

@@ -22,6 +22,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] YfinanceFetcher 在美股日K链路中改为优先使用 Yahoo chart API，规避部分本地环境 `curl_cffi/OpenSSL` 导致的 `curl: (35) TLS connect error` 噪音与失败
 - [新功能] `mag7` / `nasdaq100` 策略链路接入 SQLite `stock_daily` 持久化，优先复用本地日 K 数据，不足时自动增量补拉并回写，同时为 `stock_daily` 补充 `market` / `interval` 维度，便于后续回测扩展
 - [新功能] `/backtest` 页面新增 Profile 策略回测模式，可直接对 `mag7` / `nasdaq100` 运行 `mag7_ma_pullback`、`mag7_breakout`、`mag7_ma_cross` 的窗口回测，并展示信号级收益结果
+- [新功能] Profile 策略回测结果与汇总接入 SQLite 落库，新增 `/api/v1/backtest/profile/results` 与 `/api/v1/backtest/profile/summary` 查询接口，`/backtest` 页面刷新后可恢复最近持久化结果
+- [改进] `/backtest` 中的 Profile 策略回测结果新增分页、按股票代码与 outcome 过滤，以及按信号日期/评分/收益字段排序，提升 `Nasdaq-100` 大股票池回测结果的浏览效率
+- [改进] A 股单股分析 prompt 新增主力资金流、龙虎榜、所属板块与板块强弱上下文，帮助模型更明确判断当前结论是否得到主线与资金面的支持
+- [改进] A 股趋势分析新增日内结构信号（高开低走/低开高走、收盘位置、上下影线、接近涨跌停等），并已接入单股分析 prompt，用于提升对承接强弱与尾盘风险的判断
+- [改进] A 股专属信号进一步抽取为结构化标签，并已接入历史详情与 A 股回测结果，便于后续按标签做复盘、筛选与验证
+- [改进] 单股趋势分析新增周线趋势、周日共振与周期操作倾向判断，并将分析链路历史窗口扩展至适配周线 MA20，帮助报告同时给出中期方向与日线执行位置
+- [改进] 分析上下文新增“盘中实时”与“历史日K收盘”量价口径分离展示，成交额会同时标注来源与口径，避免实时覆盖后与券商收盘口径混淆
+- [改进] 单股分析链路接入 Portfolio 持仓上下文，若目标股票已在持仓中，会结合持仓成本、浮盈亏状态与账户明细输出更具可执行性的持仓管理建议
+- [新功能] Web 新增“持仓工作台”页面，复用 Portfolio 快照与风控数据集中展示持仓焦点、仓位风险、行业暴露与逐仓动作建议，便于按持仓者视角快速处理仓位
+- [修复] 修复持仓工作台对风险接口的强依赖；当风险计算超时或失败时，页面会降级为继续展示持仓快照与持仓清单，而不是整页无数据
+- [改进] 历史分析报告新增“行情日期 / 本地最新日期 / 新鲜度说明”展示，便于区分旧报告与已更新的本地行情数据，避免把旧报告误判为数据未更新
+- [改进] 历史报告在检测到行情已过期时，会显示“基于最新行情重新分析”按钮，支持从旧报告直接触发一次最新行情分析
+- [修复] 修复分析主流程断点续传在交易日盘中仍以“上一完整交易日”判定已存在数据的问题；A股等市场在交易日当天会优先尝试补拉当日行情，避免 5 月 25 日仍因 5 月 22 日已存在而跳过更新
+- [修复] 修复首页异步分析完成后只刷新历史列表但不自动切换到新报告的问题；现在任务完成会按股票代码自动聚焦并打开最新生成的分析结果
+- [修复] 修复 `OPENAI_BASE_URL` 搭配带斜杠的 OpenAI 兼容模型名（如 `z-ai/glm-5.1`）时的 LiteLLM 路由兼容性，避免误把上游模型 ID 前缀识别成 provider 并报 `LLM Provider NOT provided`
+- [修复] 为 NVIDIA OpenAI 兼容模型 `z-ai/glm-5.1` 注册 LiteLLM 自定义价格元数据，避免推理成功后在响应成本统计阶段输出 `response_cost_failure_debug_information`
+- [改进] 新增 `LLM_REQUEST_TIMEOUT_SECONDS` 与 `LLM_REQUEST_MAX_RETRIES` 配置，并将其接入 LiteLLM/OpenAI 兼容调用链，避免上游网关长时间超时重试时首页只表现为“无结果”而迟迟不显式失败
 - [修复] 修复 Windows 桌面端转抄后端 stdout/stderr 时中文日志可能乱码的问题，统一优先使用 UTF-8 并兼容本地代码页回退
 - [改进] Docker 发布工作流收敛为更清晰的正式发布与手动补发链路，并统一官方 Docker Hub 镜像名为 `zhulinsen/daily_stock_analysis`
 - [文档] 补充官方镜像拉取、`docker run` 用法与 `.env` / 数据目录映射说明，不再仅覆盖 Compose 部署路径

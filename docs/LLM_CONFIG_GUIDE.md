@@ -35,6 +35,15 @@ OPENAI_BASE_URL=https://api.siliconflow.cn/v1
 LITELLM_MODEL=openai/deepseek-ai/DeepSeek-V3 
 ```
 
+如果你接的是响应较慢或不稳定的 OpenAI 兼容网关，建议再补两行：
+
+```env
+LLM_REQUEST_TIMEOUT_SECONDS=30
+LLM_REQUEST_MAX_RETRIES=0
+```
+
+这样请求超时时，前端会更快收到明确失败，而不是长时间看起来“没有分析结果”。
+
 ### 示例 2：使用 DeepSeek 官方接口
 ```env
 # 填入你在 DeepSeek 官方平台申请的 API Key

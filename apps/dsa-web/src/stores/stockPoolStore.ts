@@ -56,6 +56,7 @@ export interface StockPoolState {
   closeMarkdownDrawer: () => void;
   loadInitialHistory: () => Promise<void>;
   refreshHistory: (silent?: boolean) => Promise<void>;
+  focusLatestHistoryForStock: (stockCode: string) => Promise<void>;
   loadMoreHistory: () => Promise<void>;
   selectHistoryItem: (recordId: number) => Promise<void>;
   toggleHistorySelection: (recordId: number) => void;
@@ -201,6 +202,32 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
 
   refreshHistory: async (silent = false) => {
     await fetchHistory(get, set, { reset: true, silent });
+  },
+
+  focusLatestHistoryForStock: async (stockCode) => {
+    const normalized = (stockCode || '').trim().toUpperCase();
+    if (!normalized) {
+      return;
+    }
+
+    const response = await historyApi.getList(buildHistoryParams(1));
+    const matched = response.items.find((item) => (item.stockCode || '').trim().toUpperCase() === normalized);
+
+    set({
+      historyItems: response.items,
+      currentPage: 1,
+      hasMore: response.items.length < response.total,
+      selectedHistoryIds: get().selectedHistoryIds.filter((id) => response.items.some((item) => item.id === id)),
+    });
+
+    if (matched) {
+      await get().selectHistoryItem(matched.id);
+      return;
+    }
+
+    if (response.items.length > 0 && !get().selectedReport) {
+      await get().selectHistoryItem(response.items[0].id);
+    }
   },
 
   loadMoreHistory: async () => {

@@ -11,6 +11,7 @@ import type {
   BacktestRunResponse,
   PerformanceMetrics,
   ProfileBacktestRunResponse,
+  ProfileBacktestSummary,
 } from '../types/backtest';
 import type { ProfileMeta } from '../types/profileStrategies';
 
@@ -175,10 +176,18 @@ const BacktestPage: React.FC = () => {
   const [profileStocks, setProfileStocks] = useState<string[]>([]);
   const [profileOnlyPassed, setProfileOnlyPassed] = useState(true);
   const [profileBacktest, setProfileBacktest] = useState<ProfileBacktestRunResponse | null>(null);
+  const [isLoadingProfileResults, setIsLoadingProfileResults] = useState(false);
+  const [profileResultsTotal, setProfileResultsTotal] = useState(0);
+  const [profileResultsPage, setProfileResultsPage] = useState(1);
+  const [profileResultCodeFilter, setProfileResultCodeFilter] = useState('');
+  const [profileResultOutcomeFilter, setProfileResultOutcomeFilter] = useState<'all' | 'win' | 'loss' | 'neutral'>('all');
+  const [profileSortBy, setProfileSortBy] = useState<'analysis_date' | 'score' | 'window_return_pct' | 'max_return_pct' | 'min_return_pct'>('analysis_date');
+  const [profileSortOrder, setProfileSortOrder] = useState<'asc' | 'desc'>('desc');
 
   const effectiveWindowDays = evalDays ? parseInt(evalDays, 10) : overallPerf?.evalWindowDays;
   const isNextDayValidation = effectiveWindowDays === 1;
   const showNextDayActualColumns = isNextDayValidation;
+  const profilePageSize = 20;
 
   const fetchResults = useCallback(async (
     page = 1,
@@ -275,6 +284,89 @@ const BacktestPage: React.FC = () => {
     void loadMeta();
   }, [mode, profileName]);
 
+  const loadPersistedProfileBacktest = useCallback(async (
+    page = 1,
+    summaryOverride?: ProfileBacktestSummary | null,
+  ) => {
+    if (mode !== 'profile' || !profileStrategy) {
+      return;
+    }
+
+    setIsLoadingProfileResults(true);
+    try {
+      const windowDays = evalDays ? parseInt(evalDays, 10) : undefined;
+      const summary = summaryOverride !== undefined
+        ? summaryOverride
+        : await backtestApi.getProfileSummary({
+          profileName,
+          strategyName: profileStrategy,
+          evalWindowDays: windowDays,
+        });
+
+      if (!summary) {
+        setProfileBacktest(null);
+        setProfileResultsTotal(0);
+        setProfileResultsPage(1);
+        setPageError(null);
+        return;
+      }
+
+      const resultsResponse = await backtestApi.getProfileResults({
+        profileName,
+        strategyName: profileStrategy,
+        code: profileResultCodeFilter.trim() || undefined,
+        outcome: profileResultOutcomeFilter === 'all' ? undefined : profileResultOutcomeFilter,
+        evalWindowDays: windowDays,
+        analysisDateFrom: analysisDateFrom || undefined,
+        analysisDateTo: analysisDateTo || undefined,
+        sortBy: profileSortBy,
+        sortOrder: profileSortOrder,
+        page,
+        limit: profilePageSize,
+      });
+
+      setProfileBacktest({
+        profileName,
+        strategyName: profileStrategy,
+        displayName: profileMeta?.strategies.find((item) => item.name === profileStrategy)?.displayName || profileStrategy,
+        evalWindowDays: summary.evalWindowDays,
+        summary,
+        items: resultsResponse.items,
+      });
+      setProfileResultsTotal(resultsResponse.total);
+      setProfileResultsPage(resultsResponse.page);
+      setPageError(null);
+    } catch (err) {
+      setPageError(getParsedApiError(err));
+    } finally {
+      setIsLoadingProfileResults(false);
+    }
+  }, [
+    mode,
+    profileStrategy,
+    evalDays,
+    profileName,
+    profileMeta,
+    profileResultCodeFilter,
+    profileResultOutcomeFilter,
+    analysisDateFrom,
+    analysisDateTo,
+    profileSortBy,
+    profileSortOrder,
+  ]);
+
+  useEffect(() => {
+    if (mode !== 'profile' || !profileStrategy) {
+      return;
+    }
+    void loadPersistedProfileBacktest(profileResultsPage);
+  }, [
+    mode,
+    profileStrategy,
+    profileResultsPage,
+    loadPersistedProfileBacktest,
+  ]);
+
   const handleRun = async () => {
     setIsRunning(true);
     setRunError(null);
@@ -290,7 +382,9 @@ const BacktestPage: React.FC = () => {
           evalWindowDays: evalDays ? parseInt(evalDays, 10) : 10,
           onlyPassed: profileOnlyPassed,
         });
-        setProfileBacktest(response);
+        setProfileResultsPage(1);
+        await loadPersistedProfileBacktest(1, response.summary);
+        setPageError(null);
       } catch (err) {
         setRunError(getParsedApiError(err));
       } finally {
@@ -352,6 +446,7 @@ const BacktestPage: React.FC = () => {
     const windowDays = evalDays ? parseInt(evalDays, 10) : undefined;
     fetchResults(page, codeFilter.trim() || undefined, windowDays, analysisDateFrom, analysisDateTo);
   };
+  const profileTotalPages = Math.ceil(profileResultsTotal / profilePageSize);
 
   const profileStrategyOptions = useMemo(
     () => (profileMeta?.strategies || []).map((item) => ({ value: item.name, label: item.displayName })),
@@ -364,6 +459,10 @@ const BacktestPage: React.FC = () => {
     }
     const isAllSelected = profileStocks.length === profileMeta.stockUniverse.length;
     setProfileStocks(isAllSelected ? [] : profileMeta.stockUniverse);
+  };
+
+  const handleProfilePageChange = (page: number) => {
+    setProfileResultsPage(page);
   };
 
   return (
@@ -413,7 +512,10 @@ const BacktestPage: React.FC = () => {
                 <Select
                   label="策略"
                   value={profileStrategy}
-                  onChange={setProfileStrategy}
+                  onChange={(value) => {
+                    setProfileStrategy(value);
+                    setProfileResultsPage(1);
+                  }}
                   options={profileStrategyOptions}
                 />
               </div>
@@ -560,7 +662,12 @@ const BacktestPage: React.FC = () => {
       {mode === 'profile' ? (
         <main className="min-h-0 flex-1 overflow-y-auto p-3">
           {pageError ? <ApiErrorAlert error={pageError} className="mb-3" /> : null}
-          {!profileBacktest || profileBacktest.items.length === 0 ? (
+          {isLoadingProfileResults ? (
+            <div className="flex flex-col items-center justify-center h-64">
+              <div className="backtest-spinner md" />
+              <p className="mt-3 text-secondary-text text-sm">Loading profile backtest...</p>
+            </div>
+          ) : !profileBacktest || profileBacktest.items.length === 0 ? (
             <EmptyState
               title="No Profile Backtest Results"
               description="选择画像、策略和股票池后运行回测，这里会展示每次信号在持有窗口内的收益表现。"
@@ -577,6 +684,83 @@ const BacktestPage: React.FC = () => {
                     <div className="text-xs text-secondary-text">Avg Return: {pct(item.avgReturnPct)}</div>
                   </Card>
                 ))}
+              </div>
+              <div className="mb-3 rounded-2xl border border-white/5 bg-card/45 p-3">
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,0.8fr)]">
+                  <div>
+                    <label className="mb-1 block text-xs text-muted-text">结果股票过滤</label>
+                    <input
+                      type="text"
+                      value={profileResultCodeFilter}
+                      onChange={(e) => {
+                        setProfileResultCodeFilter(e.target.value.toUpperCase());
+                        setProfileResultsPage(1);
+                      }}
+                      placeholder="输入股票代码"
+                      className={BACKTEST_INPUT_CLASS}
+                    />
+                  </div>
+                  <div>
+                    <Select
+                      label="结果类型"
+                      value={profileResultOutcomeFilter}
+                      onChange={(value) => {
+                        setProfileResultOutcomeFilter(value as 'all' | 'win' | 'loss' | 'neutral');
+                        setProfileResultsPage(1);
+                      }}
+                      options={[
+                        { value: 'all', label: '全部结果' },
+                        { value: 'win', label: 'WIN' },
+                        { value: 'loss', label: 'LOSS' },
+                        { value: 'neutral', label: 'NEUTRAL' },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <Select
+                      label="排序字段"
+                      value={profileSortBy}
+                      onChange={(value) => {
+                        setProfileSortBy(value as 'analysis_date' | 'score' | 'window_return_pct' | 'max_return_pct' | 'min_return_pct');
+                        setProfileResultsPage(1);
+                      }}
+                      options={[
+                        { value: 'analysis_date', label: '信号日期' },
+                        { value: 'score', label: '策略评分' },
+                        { value: 'window_return_pct', label: '窗口收益' },
+                        { value: 'max_return_pct', label: '最大浮盈' },
+                        { value: 'min_return_pct', label: '最大回撤' },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <Select
+                      label="排序方向"
+                      value={profileSortOrder}
+                      onChange={(value) => {
+                        setProfileSortOrder(value as 'asc' | 'desc');
+                        setProfileResultsPage(1);
+                      }}
+                      options={[
+                        { value: 'desc', label: '降序' },
+                        { value: 'asc', label: '升序' },
+                      ]}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="backtest-table-toolbar">
+                <div className="backtest-table-toolbar-meta">
+                  <span className="label-uppercase">{profileBacktest.displayName}</span>
+                  <span className="text-xs text-secondary-text">
+                    {profileResultCodeFilter.trim() ? `Filtered by ${profileResultCodeFilter.trim()}` : 'All stocks'}
+                    {profileResultOutcomeFilter !== 'all' ? ` · ${profileResultOutcomeFilter}` : ''}
+                    {evalDays ? ` · ${evalDays} day window` : ''}
+                    {analysisDateFrom ? ` · from ${analysisDateFrom}` : ''}
+                    {analysisDateTo ? ` · to ${analysisDateTo}` : ''}
+                  </span>
+                </div>
+                <span className="backtest-table-scroll-hint">Scroll horizontally on small screens</span>
               </div>
               <div className="backtest-table-wrapper">
                 <table className="backtest-table min-w-[1080px] w-full text-sm">
@@ -628,6 +812,12 @@ const BacktestPage: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+              <div className="mt-4">
+                <Pagination currentPage={profileResultsPage} totalPages={profileTotalPages} onPageChange={handleProfilePageChange} />
+              </div>
+              <p className="mt-2 text-center text-xs text-muted-text">
+                {profileResultsTotal} result{profileResultsTotal !== 1 ? 's' : ''} total · page {profileResultsPage} of {Math.max(profileTotalPages, 1)}
+              </p>
             </div>
           )}
         </main>

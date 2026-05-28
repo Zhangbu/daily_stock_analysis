@@ -5,6 +5,7 @@ import { useTaskStream } from './useTaskStream';
 type UseDashboardLifecycleOptions = {
   loadInitialHistory: () => Promise<void>;
   refreshHistory: (silent?: boolean) => Promise<void>;
+  focusLatestHistoryForStock?: (stockCode: string) => Promise<void>;
   syncTaskCreated: (task: TaskInfo) => void;
   syncTaskUpdated: (task: TaskInfo) => void;
   syncTaskFailed: (task: TaskInfo) => void;
@@ -15,6 +16,7 @@ type UseDashboardLifecycleOptions = {
 export function useDashboardLifecycle({
   loadInitialHistory,
   refreshHistory,
+  focusLatestHistoryForStock,
   syncTaskCreated,
   syncTaskUpdated,
   syncTaskFailed,
@@ -80,7 +82,11 @@ export function useDashboardLifecycle({
     onTaskProgress: syncTaskUpdated,
     onTaskCompleted: (task) => {
       syncTaskUpdated(task);
-      void refreshHistory(true);
+      if (task.stockCode && focusLatestHistoryForStock) {
+        void focusLatestHistoryForStock(task.stockCode);
+      } else {
+        void refreshHistory(true);
+      }
       scheduleTaskRemoval(task.taskId, 2_000);
     },
     onTaskFailed: (task) => {

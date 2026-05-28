@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -73,6 +73,15 @@ class ProfileBacktestRunResponse(BaseModel):
     items: List[ProfileBacktestResultItem] = Field(default_factory=list)
 
 
+class ProfileBacktestResultsResponse(BaseModel):
+    total: int
+    page: int
+    limit: int
+    sort_by: Literal["analysis_date", "score", "window_return_pct", "max_return_pct", "min_return_pct"] = "analysis_date"
+    sort_order: Literal["asc", "desc"] = "desc"
+    items: List[ProfileBacktestResultItem] = Field(default_factory=list)
+
+
 class BacktestResultItem(BaseModel):
     analysis_history_id: int
     code: str
@@ -106,6 +115,7 @@ class BacktestResultItem(BaseModel):
     simulated_exit_price: Optional[float] = None
     simulated_exit_reason: Optional[str] = None
     simulated_return_pct: Optional[float] = None
+    a_share_signal_tags: Optional[Any] = Field(None, description="A-share specific signal tags derived from saved analysis context")
 
 
 class BacktestResultsResponse(BaseModel):

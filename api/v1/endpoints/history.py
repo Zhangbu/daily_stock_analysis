@@ -39,6 +39,7 @@ from src.report_language import (
     normalize_report_language,
 )
 from src.services.history_service import HistoryService, MarkdownReportGenerationError
+from src.utils.a_share_signal_tags import derive_a_share_signal_tags
 from src.utils.data_processing import (
     normalize_model_used,
     extract_fundamental_detail_fields,
@@ -306,6 +307,10 @@ def get_history_detail(
             context_snapshot=result.get("context_snapshot"),
             fallback_fundamental_payload=fallback_fundamental,
         )
+        a_share_signal_tags = derive_a_share_signal_tags(
+            context_snapshot=result.get("context_snapshot"),
+            fallback_fundamental_payload=fallback_fundamental,
+        )
 
         details = ReportDetails(
             news_content=result.get("news_content"),
@@ -315,6 +320,7 @@ def get_history_detail(
             dividend_metrics=extracted_fundamental.get("dividend_metrics"),
             belong_boards=extracted_boards.get("belong_boards"),
             sector_rankings=extracted_boards.get("sector_rankings"),
+            a_share_signal_tags=a_share_signal_tags,
         )
         
         return AnalysisReport(

@@ -121,6 +121,8 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
     return 'danger';
   };
 
+  const showDataFreshness = Boolean(meta.marketDataDate || meta.latestDataDate || meta.dataFreshnessNote);
+
   return (
     <div className="space-y-5">
       {/* 主信息区 - 两列布局，items-stretch 确保右侧与左侧同高 */}
@@ -158,11 +160,40 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                     {formatDateTime(meta.createdAt)}
                   </span>
                 </div>
+
+                {showDataFreshness ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {meta.marketDataDate ? (
+                      <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-secondary-text">
+                        行情日期 {meta.marketDataDate}
+                      </span>
+                    ) : null}
+                    {meta.latestDataDate ? (
+                      <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-secondary-text">
+                        本地最新 {meta.latestDataDate}
+                      </span>
+                    ) : null}
+                    {meta.dataIsStale ? (
+                      <Badge variant="warning">
+                        报告未基于最新行情
+                      </Badge>
+                    ) : meta.marketDataDate ? (
+                      <Badge variant="success">
+                        行情日期已对齐
+                      </Badge>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </div>
 
             {/* 关键结论 */}
             <div className="home-divider border-t pt-5">
+              {meta.dataFreshnessNote ? (
+                <div className="mb-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs leading-6 text-secondary-text">
+                  {meta.dataFreshnessNote}
+                </div>
+              ) : null}
               <span className="label-uppercase">{text.keyInsights}</span>
               <p className="mt-2 max-w-[62ch] whitespace-pre-wrap text-left text-[15px] leading-7 text-foreground">
                 {summary.analysisSummary || text.noAnalysisSummary}

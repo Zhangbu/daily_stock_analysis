@@ -21,7 +21,7 @@ import litellm
 from json_repair import repair_json
 from litellm import Router
 
-from src.agent.llm_adapter import get_thinking_extra_body
+from src.agent.llm_adapter import LLMToolAdapter, get_thinking_extra_body
 from src.agent.skills.defaults import CORE_TRADING_SKILL_POLICY_ZH
 from src.config import (
     Config,
@@ -940,6 +940,7 @@ class GeminiAnalyzer:
             logger.warning("Analyzer LLM: LITELLM_MODEL not configured")
             return
 
+        LLMToolAdapter._register_custom_model_pricing()
         self._litellm_available = True
 
         # --- Channel / YAML path: build Router from pre-built model_list ---
@@ -1170,6 +1171,8 @@ class GeminiAnalyzer:
                     ],
                     "temperature": temperature,
                     "max_tokens": max_tokens,
+                    "timeout": config.llm_request_timeout_seconds,
+                    "max_retries": config.llm_request_max_retries,
                 }
                 extra = get_thinking_extra_body(model_short)
                 if extra:
@@ -1358,6 +1361,11 @@ class GeminiAnalyzer:
             }
 
             logger.info(f"[LLM调用] 开始调用 {model_name}...")
+            logger.info(
+                "[LLM配置] request_timeout=%.1fs, max_retries=%s",
+                config.llm_request_timeout_seconds,
+                config.llm_request_max_retries,
+            )
             _emit_progress(68, f"{name}：LLM 已接收请求，等待响应")
 
             # 使用 litellm 调用（支持完整性校验重试）
@@ -1499,13 +1507,19 @@ class GeminiAnalyzer:
 ### 今日行情
 | 指标 | 数值 |
 |------|------|
+| 数据口径 | {self._format_text((context.get('today_quote_basis') or {}).get('mode_label') or self._describe_today_quote_mode(context.get('today_quote_basis')))} |
 | 收盘价 | {today.get('close', 'N/A')} 元 |
 | 开盘价 | {today.get('open', 'N/A')} 元 |
 | 最高价 | {today.get('high', 'N/A')} 元 |
 | 最低价 | {today.get('low', 'N/A')} 元 |
 | 涨跌幅 | {today.get('pct_chg', 'N/A')}% |
 | 成交量 | {self._format_volume(today.get('volume'))} |
+| 成交量口径 | {self._format_text((context.get('today_quote_basis') or {}).get('volume_basis'))} |
 | 成交额 | {self._format_amount(today.get('amount'))} |
+| 成交额口径 | {self._format_text((context.get('today_quote_basis') or {}).get('amount_basis'))} |
+| 成交额来源 | {self._format_source_label((context.get('today_quote_basis') or {}).get('amount_source'))} |
+| 最近收盘成交额 | {self._format_amount((context.get('today_eod') or {}).get('amount'))} |
+| 收盘成交额来源 | {self._format_source_label((context.get('today_eod_meta') or {}).get('source'))} |
 
 ### 均线系统（关键判断指标）
 | 均线 | 数值 | 说明 |
@@ -1531,6 +1545,25 @@ class GeminiAnalyzer:
 | 总市值 | {self._format_amount(rt.get('total_mv'))} | |
 | 流通市值 | {self._format_amount(rt.get('circ_mv'))} | |
 | 60日涨跌幅 | {rt.get('change_60d', 'N/A')}% | 中期表现 |
+"""
+
+        if 'portfolio_position' in context:
+            holding = context['portfolio_position']
+            prompt += f"""
+### 持仓上下文（来自 Portfolio）
+| 指标 | 数值 | 说明 |
+|------|------|------|
+| 是否为当前持仓股 | 是 | 优先给出持仓管理建议 |
+| 持仓账户数 | {holding.get('account_count', 'N/A')} | |
+| 合计持股 | {holding.get('total_quantity', 'N/A')} | |
+| 加权持仓成本 | {self._format_price(holding.get('weighted_avg_cost'))} 元 | |
+| 当前相对成本 | {self._format_percent(holding.get('vs_cost_pct'))} | 正值表示浮盈 |
+| 持仓状态 | {holding.get('holding_status', 'N/A')} | |
+| 持仓市值 | {self._format_amount(holding.get('total_market_value_base'))} | 若跨账户币种不同则仅作参考 |
+| 浮动盈亏 | {self._format_amount(holding.get('total_unrealized_pnl_base'))} | 若跨账户币种不同则仅作参考 |
+| 账户明细 | {self._format_portfolio_accounts(holding.get('accounts'))} | |
+
+> 若存在持仓上下文，请优先结合持仓成本、浮盈亏状态和当前趋势，给出更可执行的“持仓者建议”，不要只给泛化结论。
 """
 
         # 添加财报与分红（价值投资口径）
@@ -1578,6 +1611,34 @@ class GeminiAnalyzer:
 > 若上述字段为 N/A 或缺失，请明确写“数据缺失，无法判断”，禁止编造。
 """
 
+        if isinstance(fundamental_context, dict) and fundamental_context.get("market") == "cn":
+            capital_flow_block = self._extract_fundamental_block_data(fundamental_context, "capital_flow")
+            dragon_tiger_block = self._extract_fundamental_block_data(fundamental_context, "dragon_tiger")
+            boards_block = self._extract_fundamental_block_data(fundamental_context, "boards")
+            belong_boards = fundamental_context.get("belong_boards", [])
+
+            stock_flow = capital_flow_block.get("stock_flow", {}) if isinstance(capital_flow_block, dict) else {}
+            sector_rankings = capital_flow_block.get("sector_rankings", {}) if isinstance(capital_flow_block, dict) else {}
+            board_top = sector_rankings.get("top", []) if isinstance(sector_rankings, dict) else []
+            board_bottom = sector_rankings.get("bottom", []) if isinstance(sector_rankings, dict) else []
+            board_rankings_top = boards_block.get("top", []) if isinstance(boards_block, dict) else []
+            board_rankings_bottom = boards_block.get("bottom", []) if isinstance(boards_block, dict) else []
+
+            prompt += f"""
+### A股资金与板块结构
+| 指标 | 数值 | 说明 |
+|------|------|------|
+| 主力净流入 | {self._format_amount(stock_flow.get('main_net_inflow'))} | 当日主力资金方向 |
+| 5日主力净流入 | {self._format_amount(stock_flow.get('inflow_5d'))} | 判断连续性 |
+| 10日主力净流入 | {self._format_amount(stock_flow.get('inflow_10d'))} | 判断中短期趋势 |
+| 龙虎榜 | {self._format_dragon_tiger_summary(dragon_tiger_block)} | 识别游资/机构异动 |
+| 所属板块 | {self._format_board_membership(belong_boards)} | 判断是否位于主线题材 |
+| 资金流入居前板块 | {self._format_sector_flow_items(board_top)} | 资金风险偏好 |
+| 资金流出居前板块 | {self._format_sector_flow_items(board_bottom)} | 回避方向 |
+| 板块涨幅居前 | {self._format_board_rankings(board_rankings_top, metric_key='change_pct', suffix='%')} | 市场主线热度 |
+| 板块跌幅居前 | {self._format_board_rankings(board_rankings_bottom, metric_key='change_pct', suffix='%')} | 弱势扩散方向 |
+"""
+
         # 添加筹码分布数据
         if 'chip' in context:
             chip = context['chip']
@@ -1605,8 +1666,15 @@ class GeminiAnalyzer:
 | 趋势状态 | {trend.get('trend_status', unknown_text)} | |
 | 均线排列 | {trend.get('ma_alignment', unknown_text)} | MA5>MA10>MA20为多头 |
 | 趋势强度 | {trend.get('trend_strength', 0)}/100 | |
+| 周线趋势 | {trend.get('weekly_trend_status', unknown_text)} | |
+| 周线均线结构 | {trend.get('weekly_ma_alignment', unknown_text)} | 判断中期方向 |
+| 周线强度 | {trend.get('weekly_trend_strength', 0)}/100 | |
+| 周期共振 | {trend.get('timeframe_resonance', unknown_text)} | |
+| 周期操作倾向 | {trend.get('timeframe_action_bias', unknown_text)} | |
 | **乖离率(MA5)** | **{trend.get('bias_ma5', 0):+.2f}%** | {bias_warning} |
 | 乖离率(MA10) | {trend.get('bias_ma10', 0):+.2f}% | |
+| 周线价格位置(MA5) | {trend.get('weekly_bias_ma5', 0):+.2f}% | 观察周线是否高位 |
+| 周线价格位置(MA10) | {trend.get('weekly_bias_ma10', 0):+.2f}% | |
 | 量能状态 | {trend.get('volume_status', unknown_text)} | {trend.get('volume_trend', '')} |
 | 系统信号 | {trend.get('buy_signal', unknown_text)} | |
 | 系统评分 | {trend.get('signal_score', 0)}/100 | |
@@ -1631,8 +1699,15 @@ class GeminiAnalyzer:
 | 趋势状态 | {trend.get('trend_status', unknown_text)} | |
 | 均线排列 | {trend.get('ma_alignment', unknown_text)} | 结合激活技能判断结构强弱 |
 | 趋势强度 | {trend.get('trend_strength', 0)}/100 | |
+| 周线趋势 | {trend.get('weekly_trend_status', unknown_text)} | |
+| 周线均线结构 | {trend.get('weekly_ma_alignment', unknown_text)} | 判断中期方向 |
+| 周线强度 | {trend.get('weekly_trend_strength', 0)}/100 | |
+| 周期共振 | {trend.get('timeframe_resonance', unknown_text)} | |
+| 周期操作倾向 | {trend.get('timeframe_action_bias', unknown_text)} | |
 | **价格位置(MA5)** | **{trend.get('bias_ma5', 0):+.2f}%** | {bias_warning} |
 | 价格位置(MA10) | {trend.get('bias_ma10', 0):+.2f}% | |
+| 周线价格位置(MA5) | {trend.get('weekly_bias_ma5', 0):+.2f}% | 观察周线是否高位 |
+| 周线价格位置(MA10) | {trend.get('weekly_bias_ma10', 0):+.2f}% | |
 | 量能状态 | {trend.get('volume_status', unknown_text)} | {trend.get('volume_trend', '')} |
 | 系统信号 | {trend.get('buy_signal', unknown_text)} | |
 | 系统评分 | {trend.get('signal_score', 0)}/100 | |
@@ -1643,6 +1718,24 @@ class GeminiAnalyzer:
 
 **风险因素**：
 {chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
+"""
+
+            if isinstance(fundamental_context, dict) and fundamental_context.get("market") == "cn":
+                prompt += f"""
+### A股日内结构信号
+| 指标 | 数值 | 含义 |
+|------|------|------|
+| 日内结构 | {trend.get('intraday_pattern', 'N/A')} | 观察承接与抛压 |
+| 收盘位置 | {trend.get('close_position_pct', 'N/A')}% | 越接近 0 越靠近日内低位 |
+| 上影线 | {trend.get('upper_shadow_pct', 'N/A')}% | 越长说明上方抛压越大 |
+| 下影线 | {trend.get('lower_shadow_pct', 'N/A')}% | 越长说明下方承接越强 |
+| 距涨停价 | {trend.get('distance_to_limit_up_pct', 'N/A')}% | 观察情绪强度 |
+| 距跌停价 | {trend.get('distance_to_limit_down_pct', 'N/A')}% | 观察风险边界 |
+| 是否接近涨停 | {'是' if trend.get('near_limit_up') else '否'} | 情绪强弱参考 |
+| 是否接近跌停 | {'是' if trend.get('near_limit_down') else '否'} | 风险提示 |
+| 是否弱收 | {'是' if trend.get('weak_close') else '否'} | 尾盘承接判断 |
+
+> 若出现“高开低走 / 弱收 / 长上影 / 接近跌停”，请优先从风险控制角度解释；若出现“低开高走 / 收盘靠高位 / 接近涨停”，请解释其持续性是否足够。
 """
         
         # 添加昨日对比数据
@@ -1735,7 +1828,9 @@ class GeminiAnalyzer:
 2. ❓ 当前乖离率是否在安全范围内（<5%）？—— 超过5%必须标注"严禁追高"
 3. ❓ 量能是否配合（缩量回调/放量突破）？
 4. ❓ 筹码结构是否健康？
-5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
+5. ❓ 主力资金、龙虎榜、所属板块强弱是否支持当前结论？
+6. ❓ 日内结构是否体现承接转强还是冲高回落？
+7. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
 """
         else:
             prompt += f"""
@@ -1743,9 +1838,15 @@ class GeminiAnalyzer:
 ### 重点关注（必须明确回答）：
 1. ❓ 当前结构是否满足激活技能的关键触发条件？
 2. ❓ 当前入场位置与风险回报是否合理？若偏离过大，请明确说明等待条件
-3. ❓ 量能、波动与筹码结构是否支持当前结论？
-4. ❓ 消息面有无重大利空或与技能结论冲突的信息？
-5. ❓ 若结论成立，具体触发条件、止损位、观察点分别是什么？
+3. ❓ 量能、波动、筹码、资金流是否共同支持当前结论？
+4. ❓ 所属板块是否处于主线，还是仅有个股独立异动？
+5. ❓ 日内结构是转强承接还是冲高回落，是否支持明日延续？
+6. ❓ 消息面有无重大利空或与技能结论冲突的信息？
+7. ❓ 若结论成立，具体触发条件、止损位、观察点分别是什么？
+"""
+        if context.get('portfolio_position'):
+            prompt += """
+8. ❓ 若你已持有该股，请明确回答：当前更适合继续持有、减仓锁盈、回避补仓，还是等待反弹减亏？
 """
         prompt += f"""
 
@@ -1755,6 +1856,7 @@ class GeminiAnalyzer:
 - **持仓分类建议**：空仓者怎么做 vs 持仓者怎么做
 - **具体狙击点位**：买入价、止损价、目标价（精确到分）
 - **检查清单**：每项用 ✅/⚠️/❌ 标记
+- **A股个股补充判断**：若为 A 股个股，请在结论中明确交代主力资金方向、龙虎榜异动、所属板块强弱是否支持操作
 - **消息面时间合规**：`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或时间未知的信息
 
 请输出完整的 JSON 格式决策仪表盘。"""
@@ -1804,6 +1906,49 @@ class GeminiAnalyzer:
         else:
             return f"{amount:.0f} 元"
 
+    def _format_portfolio_accounts(self, accounts: Optional[List[Dict[str, Any]]]) -> str:
+        """格式化持仓账户摘要，避免在 Prompt 中塞入过长明细。"""
+        if not accounts:
+            return 'N/A'
+
+        entries: List[str] = []
+        for item in accounts[:3]:
+            if not isinstance(item, dict):
+                continue
+            account_name = item.get('account_name') or f"账户{item.get('account_id', '')}"
+            quantity = item.get('quantity')
+            avg_cost = self._format_price(item.get('avg_cost'))
+            quantity_text = f"{quantity}" if quantity is not None else "N/A"
+            entries.append(f"{account_name}: {quantity_text}股 / 成本{avg_cost}元")
+
+        if not entries:
+            return 'N/A'
+        if len(accounts) > 3:
+            entries.append(f"等{len(accounts)}个账户")
+        return "；".join(entries)
+
+    def _format_text(self, value: Optional[Any]) -> str:
+        """格式化普通文本字段"""
+        if value is None:
+            return 'N/A'
+        text = str(value).strip()
+        return text or 'N/A'
+
+    def _format_source_label(self, source: Optional[Any]) -> str:
+        """格式化数据来源标签"""
+        if source is None:
+            return 'N/A'
+        return self._format_text(getattr(source, 'value', source))
+
+    def _describe_today_quote_mode(self, basis: Optional[Dict[str, Any]]) -> str:
+        """将 today_quote_basis.mode 转成可读中文。"""
+        mode = ((basis or {}).get('mode') or '').strip().lower()
+        mapping = {
+            'realtime_overlay': '盘中实时覆盖展示',
+            'eod_only': '历史日K收盘口径',
+        }
+        return mapping.get(mode, 'N/A')
+
     def _format_percent(self, value: Optional[float]) -> str:
         """格式化百分比显示"""
         if value is None:
@@ -1812,6 +1957,89 @@ class GeminiAnalyzer:
             return f"{float(value):.2f}%"
         except (TypeError, ValueError):
             return 'N/A'
+
+    def _extract_fundamental_block_data(self, fundamental_context: Any, block_name: str) -> Dict[str, Any]:
+        """Extract normalized data payload from a fundamental block."""
+        if not isinstance(fundamental_context, dict):
+            return {}
+        block = fundamental_context.get(block_name, {})
+        if not isinstance(block, dict):
+            return {}
+        payload = block.get("data", {})
+        return payload if isinstance(payload, dict) else {}
+
+    def _format_sector_flow_items(self, items: Any) -> str:
+        """Format sector flow ranking items into a compact prompt string."""
+        if not isinstance(items, list) or not items:
+            return 'N/A'
+
+        parts: List[str] = []
+        for item in items[:3]:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not name:
+                continue
+            flow_text = self._format_amount(item.get("net_inflow"))
+            parts.append(f"{name}({flow_text})")
+        return "、".join(parts) if parts else 'N/A'
+
+    def _format_board_rankings(self, items: Any, metric_key: str = "change_pct", suffix: str = "") -> str:
+        """Format board ranking items into a compact prompt string."""
+        if not isinstance(items, list) or not items:
+            return 'N/A'
+
+        parts: List[str] = []
+        for item in items[:3]:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not name:
+                continue
+            metric = item.get(metric_key)
+            if metric is None:
+                parts.append(str(name))
+                continue
+            try:
+                metric_text = f"{float(metric):.2f}{suffix}"
+            except (TypeError, ValueError):
+                metric_text = f"{metric}{suffix}"
+            parts.append(f"{name}({metric_text})")
+        return "、".join(parts) if parts else 'N/A'
+
+    def _format_board_membership(self, boards: Any) -> str:
+        """Format board membership list into a compact prompt string."""
+        if not isinstance(boards, list) or not boards:
+            return 'N/A'
+
+        parts: List[str] = []
+        for item in boards[:5]:
+            if isinstance(item, dict):
+                name = item.get("name")
+                board_type = item.get("type")
+                if name and board_type:
+                    parts.append(f"{name}({board_type})")
+                elif name:
+                    parts.append(str(name))
+            elif item:
+                parts.append(str(item))
+        return "、".join(parts) if parts else 'N/A'
+
+    def _format_dragon_tiger_summary(self, data: Any) -> str:
+        """Format dragon-tiger summary into a compact prompt string."""
+        if not isinstance(data, dict) or not data:
+            return 'N/A'
+
+        is_on_list = data.get("is_on_list")
+        recent_count = data.get("recent_count")
+        latest_date = data.get("latest_date")
+        if is_on_list:
+            latest_text = latest_date or "最近一期"
+            return f"近20日上榜{recent_count or 1}次，最近日期{latest_text}"
+        if recent_count:
+            latest_text = latest_date or "历史记录"
+            return f"近阶段上榜{recent_count}次，最近日期{latest_text}"
+        return "近20日未见上榜"
 
     def _format_price(self, value: Optional[float]) -> str:
         """格式化价格显示"""
@@ -1858,6 +2086,12 @@ class GeminiAnalyzer:
             "amplitude": self._format_percent(amplitude),
             "volume": self._format_volume(today.get('volume')),
             "amount": self._format_amount(today.get('amount')),
+            "quote_mode": self._describe_today_quote_mode(context.get('today_quote_basis')),
+            "volume_basis": self._format_text((context.get('today_quote_basis') or {}).get('volume_basis')),
+            "amount_basis": self._format_text((context.get('today_quote_basis') or {}).get('amount_basis')),
+            "amount_source": self._format_source_label((context.get('today_quote_basis') or {}).get('amount_source')),
+            "eod_amount": self._format_amount((context.get('today_eod') or {}).get('amount')),
+            "eod_amount_source": self._format_source_label((context.get('today_eod_meta') or {}).get('source')),
         }
 
         if realtime:
