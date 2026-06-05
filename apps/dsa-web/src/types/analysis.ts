@@ -229,8 +229,46 @@ export interface NewsIntelResponse {
 /** History filter parameters */
 export interface HistoryFilters {
   stockCode?: string;
+  operationAdvice?: string;
   startDate?: string;
   endDate?: string;
+}
+
+export interface HistoryReviewItem {
+  id: number;
+  queryId: string;
+  stockCode: string;
+  stockName?: string;
+  createdAt?: string;
+  analysisDate?: string;
+  operationAdvice?: string;
+  sentimentScore?: number;
+  entryPrice?: number;
+  verdict?: 'hit' | 'partial' | 'miss' | null;
+  observationDays: number;
+  t1ReturnPct?: number;
+  t5ReturnPct?: number;
+  t10ReturnPct?: number;
+  maxUpsidePct?: number;
+  maxDrawdownPct?: number;
+}
+
+export interface HistoryReviewSummary {
+  total: number;
+  hitRatePct?: number;
+  avgT1ReturnPct?: number;
+  avgT5ReturnPct?: number;
+  avgT10ReturnPct?: number;
+  avgMaxUpsidePct?: number;
+  avgMaxDrawdownPct?: number;
+  verdictCounts: Record<string, number>;
+}
+
+export interface HistoryReviewListResponse {
+  total: number;
+  page: number;
+  limit: number;
+  items: HistoryReviewItem[];
 }
 
 /** History pagination parameters */

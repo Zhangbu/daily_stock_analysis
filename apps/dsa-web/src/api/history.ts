@@ -4,6 +4,9 @@ import type {
   HistoryListResponse,
   HistoryItem,
   HistoryFilters,
+  HistoryReviewItem,
+  HistoryReviewListResponse,
+  HistoryReviewSummary,
   AnalysisReport,
   NewsIntelResponse,
   NewsIntelItem,
@@ -12,6 +15,12 @@ import type {
 // ============ API 接口 ============
 
 export interface GetHistoryListParams extends HistoryFilters {
+  page?: number;
+  limit?: number;
+}
+
+export interface GetHistoryReviewParams extends HistoryFilters {
+  verdict?: 'hit' | 'partial' | 'miss';
   page?: number;
   limit?: number;
 }
@@ -26,6 +35,7 @@ export const historyApi = {
 
     const queryParams: Record<string, string | number> = { page, limit };
     if (stockCode) queryParams.stock_code = stockCode;
+    if (params.operationAdvice) queryParams.operation_advice = params.operationAdvice;
     if (startDate) queryParams.start_date = startDate;
     if (endDate) queryParams.end_date = endDate;
 
@@ -40,6 +50,50 @@ export const historyApi = {
       limit: data.limit,
       items: data.items.map(item => toCamelCase<HistoryItem>(item)),
     };
+  },
+
+  /**
+   * 获取历史分析复盘列表
+   */
+  getReviewList: async (params: GetHistoryReviewParams = {}): Promise<HistoryReviewListResponse> => {
+    const { stockCode, operationAdvice, verdict, startDate, endDate, page = 1, limit = 20 } = params;
+
+    const queryParams: Record<string, string | number> = { page, limit };
+    if (stockCode) queryParams.stock_code = stockCode;
+    if (operationAdvice) queryParams.operation_advice = operationAdvice;
+    if (verdict) queryParams.verdict = verdict;
+    if (startDate) queryParams.start_date = startDate;
+    if (endDate) queryParams.end_date = endDate;
+
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/history/review', {
+      params: queryParams,
+    });
+
+    const data = toCamelCase<{ total: number; page: number; limit: number; items: HistoryReviewItem[] }>(response.data);
+    return {
+      total: data.total,
+      page: data.page,
+      limit: data.limit,
+      items: data.items.map(item => toCamelCase<HistoryReviewItem>(item)),
+    };
+  },
+
+  /**
+   * 获取历史分析复盘统计摘要
+   */
+  getReviewSummary: async (params: Omit<GetHistoryReviewParams, 'page' | 'limit'> = {}): Promise<HistoryReviewSummary> => {
+    const { stockCode, operationAdvice, verdict, startDate, endDate } = params;
+    const queryParams: Record<string, string> = {};
+    if (stockCode) queryParams.stock_code = stockCode;
+    if (operationAdvice) queryParams.operation_advice = operationAdvice;
+    if (verdict) queryParams.verdict = verdict;
+    if (startDate) queryParams.start_date = startDate;
+    if (endDate) queryParams.end_date = endDate;
+
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/history/review/summary', {
+      params: queryParams,
+    });
+    return toCamelCase<HistoryReviewSummary>(response.data);
   },
 
   /**

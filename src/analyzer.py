@@ -665,152 +665,59 @@ class GeminiAnalyzer:
 {default_skill_policy_section}
 {skills_section}
 
-## 输出格式：决策仪表盘 JSON
-
-请严格按照以下 JSON 格式输出，这是一个完整的【决策仪表盘】：
+## 输出格式
 
 ```json
 {
-    "stock_name": "股票中文名称",
-    "sentiment_score": 0-100整数,
-    "trend_prediction": "强烈看多/看多/震荡/看空/强烈看空",
-    "operation_advice": "买入/加仓/持有/减仓/卖出/观望",
-    "decision_type": "buy/hold/sell",
-    "confidence_level": "高/中/低",
-
-    "dashboard": {
-        "core_conclusion": {
-            "one_sentence": "一句话核心结论（30字以内，直接告诉用户做什么）",
-            "signal_type": "🟢买入信号/🟡持有观望/🔴卖出信号/⚠️风险警告",
-            "time_sensitivity": "立即行动/今日内/本周内/不急",
-            "position_advice": {
-                "no_position": "空仓者建议：具体操作指引",
-                "has_position": "持仓者建议：具体操作指引"
-            }
-        },
-
-        "data_perspective": {
-            "trend_status": {
-                "ma_alignment": "均线排列状态描述",
-                "is_bullish": true/false,
-                "trend_score": 0-100
-            },
-            "price_position": {
-                "current_price": 当前价格数值,
-                "ma5": MA5数值,
-                "ma10": MA10数值,
-                "ma20": MA20数值,
-                "bias_ma5": 乖离率百分比数值,
-                "bias_status": "安全/警戒/危险",
-                "support_level": 支撑位价格,
-                "resistance_level": 压力位价格
-            },
-            "volume_analysis": {
-                "volume_ratio": 量比数值,
-                "volume_status": "放量/缩量/平量",
-                "turnover_rate": 换手率百分比,
-                "volume_meaning": "量能含义解读（如：缩量回调表示抛压减轻）"
-            },
-            "chip_structure": {
-                "profit_ratio": 获利比例,
-                "avg_cost": 平均成本,
-                "concentration": 筹码集中度,
-                "chip_health": "健康/一般/警惕"
-            }
-        },
-
-        "intelligence": {
-            "latest_news": "【最新消息】近期重要新闻摘要",
-            "risk_alerts": ["风险点1：具体描述", "风险点2：具体描述"],
-            "positive_catalysts": ["利好1：具体描述", "利好2：具体描述"],
-            "earnings_outlook": "业绩预期分析（基于年报预告、业绩快报等）",
-            "sentiment_summary": "舆情情绪一句话总结"
-        },
-
-        "battle_plan": {
-            "sniper_points": {
-                "ideal_buy": "理想入场位：XX元（满足主要技能触发条件）",
-                "secondary_buy": "次优入场位：XX元（更保守或确认后执行）",
-                "stop_loss": "止损位：XX元（失效条件或X%风险）",
-                "take_profit": "目标位：XX元（按阻力位/风险回报比制定）"
-            },
-            "position_strategy": {
-                "suggested_position": "建议仓位：X成",
-                "entry_plan": "分批建仓策略描述",
-                "risk_control": "风控策略描述"
-            },
-            "action_checklist": [
-                "✅/⚠️/❌ 检查项1：当前结构是否满足激活技能条件",
-                "✅/⚠️/❌ 检查项2：入场位置与风险回报是否合理",
-                "✅/⚠️/❌ 检查项3：量价/波动/筹码是否支持判断",
-                "✅/⚠️/❌ 检查项4：无重大利空",
-                "✅/⚠️/❌ 检查项5：仓位与止损计划明确",
-                "✅/⚠️/❌ 检查项6：估值/业绩/催化与结论匹配"
-            ]
-        }
+  stock_name: 股票名, sentiment_score: 0-100,
+  trend_prediction: 强烈看多|看多|震荡|看空|强烈看空,
+  operation_advice: 买入|加仓|持有|减仓|卖出|观望,
+  decision_type: buy|hold|sell, confidence_level: 高|中|低,
+  dashboard: {
+    core_conclusion: {
+      one_sentence: 30字内结论, signal_type: 买入信号|持有观望|卖出信号|风险警告,
+      time_sensitivity: 立即行动|今日内|本周内|不急,
+      position_advice: { no_position: 空仓者建议, has_position: 持仓者建议 }
     },
-
-    "analysis_summary": "100字综合分析摘要",
-    "key_points": "3-5个核心看点，逗号分隔",
-    "risk_warning": "风险提示",
-    "buy_reason": "操作理由，引用激活技能或风险框架",
-
-    "trend_analysis": "走势形态分析",
-    "short_term_outlook": "短期1-3日展望",
-    "medium_term_outlook": "中期1-2周展望",
-    "technical_analysis": "技术面综合分析",
-    "ma_analysis": "均线系统分析",
-    "volume_analysis": "量能分析",
-    "pattern_analysis": "K线形态分析",
-    "fundamental_analysis": "基本面分析",
-    "sector_position": "板块行业分析",
-    "company_highlights": "公司亮点/风险",
-    "news_summary": "新闻摘要",
-    "market_sentiment": "市场情绪",
-    "hot_topics": "相关热点",
-
-    "search_performed": true/false,
-    "data_sources": "数据来源说明"
+    data_perspective: {
+      trend_status: { ma_alignment: 均线排列, is_bullish: bool, trend_score: 0-100 },
+      price_position: { current_price: 数值, ma5: 数值, ma10: 数值, ma20: 数值, bias_ma5: 百分比, bias_status: 安全|警戒|危险, support_level: 价格, resistance_level: 价格 },
+      volume_analysis: { volume_ratio: 量比, volume_status: 放量|缩量|平量, turnover_rate: 百分比, volume_meaning: 量能解读 },
+      chip_structure: { profit_ratio: 获利比例, avg_cost: 平均成本, concentration: 集中度, chip_health: 健康|一般|警惕 }
+    },
+    intelligence: {
+      latest_news: 摘要, risk_alerts: [风险点], positive_catalysts: [利好],
+      earnings_outlook: 业绩预期, sentiment_summary: 舆情总结
+    },
+    battle_plan: {
+      sniper_points: { ideal_buy: 价格+说明, secondary_buy: 价格+说明, stop_loss: 止损, take_profit: 目标 },
+      position_strategy: { suggested_position: X成, entry_plan: 说明, risk_control: 说明 },
+      action_checklist: [✅/⚠️/❌ 检查项]
+    }
+  },
+  analysis_summary: 综合摘要, key_points: 核心看点, risk_warning: 风险提示,
+  buy_reason: 操作理由, trend_analysis: 走势, short_term_outlook: 短期, medium_term_outlook: 中期,
+  technical_analysis: 技术, ma_analysis: 均线, volume_analysis: 量能, pattern_analysis: 形态,
+  fundamental_analysis: 基本面, sector_position: 板块, company_highlights: 公司,
+  news_summary: 新闻, market_sentiment: 情绪, hot_topics: 热点,
+  search_performed: bool, data_sources: 来源
 }
 ```
 
 ## 评分标准
 
-### 强烈买入（80-100分）：
-- ✅ 多个激活技能同时支持积极结论
-- ✅ 上行空间、触发条件与风险回报清晰
-- ✅ 关键风险已排查，仓位与止损计划明确
-- ✅ 重要数据和情报结论彼此一致
+- **强烈买入(80-100)**: 多头排列+乖离率<2%+缩量回调/放量突破+筹码健康+利好催化
+- **买入(60-79)**: 多头/弱势多头+乖离率<5%+量能正常
+- **观望(40-59)**: 乖离率>5%追高风险 或 均线缠绕 或 有风险事件
+- **卖出/减仓(0-39)**: 空头排列 或 跌破MA20 或 放量下跌 或 重大利空
 
-### 买入（60-79分）：
-- ✅ 主信号偏积极，但仍有少量待确认项
-- ✅ 允许存在可控风险或次优入场点
-- ✅ 需要在报告中明确补充观察条件
+## 核心原则
 
-### 观望（40-59分）：
-- ⚠️ 信号分歧较大，或缺乏足够确认
-- ⚠️ 风险与机会大致均衡
-- ⚠️ 更适合等待触发条件或回避不确定性
-
-### 卖出/减仓（0-39分）：
-- ❌ 主要结论转弱，风险明显高于收益
-- ❌ 触发了止损/失效条件或重大利空
-- ❌ 现有仓位更需要保护而不是进攻
-
-## 决策仪表盘核心原则
-
-1. **核心结论先行**：一句话说清该买该卖
-2. **分持仓建议**：空仓者和持仓者给不同建议
-3. **精确狙击点**：必须给出具体价格，不说模糊的话
-4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
-5. **风险优先级**：舆情中的风险点要醒目标出"""
-
-    TEXT_SYSTEM_PROMPT = """你是一位专业的股票分析助手。
-
-- 回答必须基于用户提供的数据与上下文
-- 若信息不足，要明确指出不确定性
-- 不要编造价格、财报或新闻事实
-"""
+1. 结论先行，一句话说清买卖
+2. 分空仓/持仓给不同建议
+3. 狙击点必须给具体价格
+4. 检查清单用 ✅⚠️❌
+5. 舆情风险点要醒目标出"""
 
     def __init__(
         self,
@@ -1494,76 +1401,31 @@ class GeminiAnalyzer:
         prompt = f"""# 决策仪表盘分析请求
 
 ## 📊 股票基础信息
-| 项目 | 数据 |
-|------|------|
-| 股票代码 | **{code}** |
-| 股票名称 | **{stock_name}** |
-| 分析日期 | {context.get('date', unknown_text)} |
-
----
+代码={code} 名称={stock_name} 日期={context.get('date', unknown_text)}
 
 ## 📈 技术面数据
 
 ### 今日行情
-| 指标 | 数值 |
-|------|------|
-| 数据口径 | {self._format_text((context.get('today_quote_basis') or {}).get('mode_label') or self._describe_today_quote_mode(context.get('today_quote_basis')))} |
-| 收盘价 | {today.get('close', 'N/A')} 元 |
-| 开盘价 | {today.get('open', 'N/A')} 元 |
-| 最高价 | {today.get('high', 'N/A')} 元 |
-| 最低价 | {today.get('low', 'N/A')} 元 |
-| 涨跌幅 | {today.get('pct_chg', 'N/A')}% |
-| 成交量 | {self._format_volume(today.get('volume'))} |
-| 成交量口径 | {self._format_text((context.get('today_quote_basis') or {}).get('volume_basis'))} |
-| 成交额 | {self._format_amount(today.get('amount'))} |
-| 成交额口径 | {self._format_text((context.get('today_quote_basis') or {}).get('amount_basis'))} |
-| 成交额来源 | {self._format_source_label((context.get('today_quote_basis') or {}).get('amount_source'))} |
-| 最近收盘成交额 | {self._format_amount((context.get('today_eod') or {}).get('amount'))} |
-| 收盘成交额来源 | {self._format_source_label((context.get('today_eod_meta') or {}).get('source'))} |
+数据口径={self._format_text((context.get('today_quote_basis') or {}).get('mode_label') or self._describe_today_quote_mode(context.get('today_quote_basis')))} 收盘价={today.get('close', 'N/A')} 开盘价={today.get('open', 'N/A')} 最高价={today.get('high', 'N/A')} 最低价={today.get('low', 'N/A')} 涨跌幅={today.get('pct_chg', 'N/A')}% 成交量={self._format_volume(today.get('volume'))} 成交额={self._format_amount(today.get('amount'))} 量口径={self._format_text((context.get('today_quote_basis') or {}).get('volume_basis'))} 额口径={self._format_text((context.get('today_quote_basis') or {}).get('amount_basis'))} 额来源={self._format_source_label((context.get('today_quote_basis') or {}).get('amount_source'))} 收盘额={self._format_amount((context.get('today_eod') or {}).get('amount'))} 收盘额来源={self._format_source_label((context.get('today_eod_meta') or {}).get('source'))}
 
-### 均线系统（关键判断指标）
-| 均线 | 数值 | 说明 |
-|------|------|------|
-| MA5 | {today.get('ma5', 'N/A')} | 短期趋势线 |
-| MA10 | {today.get('ma10', 'N/A')} | 中短期趋势线 |
-| MA20 | {today.get('ma20', 'N/A')} | 中期趋势线 |
-| 均线形态 | {context.get('ma_status', unknown_text)} | 多头/空头/缠绕 |
+### 均线系统
+MA5={today.get('ma5', 'N/A')} MA10={today.get('ma10', 'N/A')} MA20={today.get('ma20', 'N/A')} 均线形态={context.get('ma_status', unknown_text)}
 """
         
         # 添加实时行情数据（量比、换手率等）
         if 'realtime' in context:
             rt = context['realtime']
             prompt += f"""
-### 实时行情增强数据
-| 指标 | 数值 | 解读 |
-|------|------|------|
-| 当前价格 | {rt.get('price', 'N/A')} 元 | |
-| **量比** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
-| **换手率** | **{rt.get('turnover_rate', 'N/A')}%** | |
-| 市盈率(动态) | {rt.get('pe_ratio', 'N/A')} | |
-| 市净率 | {rt.get('pb_ratio', 'N/A')} | |
-| 总市值 | {self._format_amount(rt.get('total_mv'))} | |
-| 流通市值 | {self._format_amount(rt.get('circ_mv'))} | |
-| 60日涨跌幅 | {rt.get('change_60d', 'N/A')}% | 中期表现 |
+### 实时行情增强
+price={rt.get('price', 'N/A')} vol_ratio={rt.get('volume_ratio', 'N/A')}({rt.get('volume_ratio_desc', '')}) turnover={rt.get('turnover_rate', 'N/A')}% pe={rt.get('pe_ratio', 'N/A')} pb={rt.get('pb_ratio', 'N/A')} mv={self._format_amount(rt.get('total_mv'))} circ_mv={self._format_amount(rt.get('circ_mv'))} change_60d={rt.get('change_60d', 'N/A')}%
 """
 
         if 'portfolio_position' in context:
             holding = context['portfolio_position']
             prompt += f"""
-### 持仓上下文（来自 Portfolio）
-| 指标 | 数值 | 说明 |
-|------|------|------|
-| 是否为当前持仓股 | 是 | 优先给出持仓管理建议 |
-| 持仓账户数 | {holding.get('account_count', 'N/A')} | |
-| 合计持股 | {holding.get('total_quantity', 'N/A')} | |
-| 加权持仓成本 | {self._format_price(holding.get('weighted_avg_cost'))} 元 | |
-| 当前相对成本 | {self._format_percent(holding.get('vs_cost_pct'))} | 正值表示浮盈 |
-| 持仓状态 | {holding.get('holding_status', 'N/A')} | |
-| 持仓市值 | {self._format_amount(holding.get('total_market_value_base'))} | 若跨账户币种不同则仅作参考 |
-| 浮动盈亏 | {self._format_amount(holding.get('total_unrealized_pnl_base'))} | 若跨账户币种不同则仅作参考 |
-| 账户明细 | {self._format_portfolio_accounts(holding.get('accounts'))} | |
-
-> 若存在持仓上下文，请优先结合持仓成本、浮盈亏状态和当前趋势，给出更可执行的“持仓者建议”，不要只给泛化结论。
+### 持仓上下文
+is_holding=true accounts={holding.get('account_count', 'N/A')} qty={holding.get('total_quantity', 'N/A')} cost={self._format_price(holding.get('weighted_avg_cost'))} vs_cost={self._format_percent(holding.get('vs_cost_pct'))} status={holding.get('holding_status', 'N/A')} mv={self._format_amount(holding.get('total_market_value_base'))} pnl={self._format_amount(holding.get('total_unrealized_pnl_base'))} detail={self._format_portfolio_accounts(holding.get('accounts'))}
+> 若存在持仓上下文，请优先结合持仓成本、浮盈亏和当前趋势，给出更可执行的"持仓者建议"，不要只给泛化结论。
 """
 
         # 添加财报与分红（价值投资口径）
@@ -1625,18 +1487,8 @@ class GeminiAnalyzer:
             board_rankings_bottom = boards_block.get("bottom", []) if isinstance(boards_block, dict) else []
 
             prompt += f"""
-### A股资金与板块结构
-| 指标 | 数值 | 说明 |
-|------|------|------|
-| 主力净流入 | {self._format_amount(stock_flow.get('main_net_inflow'))} | 当日主力资金方向 |
-| 5日主力净流入 | {self._format_amount(stock_flow.get('inflow_5d'))} | 判断连续性 |
-| 10日主力净流入 | {self._format_amount(stock_flow.get('inflow_10d'))} | 判断中短期趋势 |
-| 龙虎榜 | {self._format_dragon_tiger_summary(dragon_tiger_block)} | 识别游资/机构异动 |
-| 所属板块 | {self._format_board_membership(belong_boards)} | 判断是否位于主线题材 |
-| 资金流入居前板块 | {self._format_sector_flow_items(board_top)} | 资金风险偏好 |
-| 资金流出居前板块 | {self._format_sector_flow_items(board_bottom)} | 回避方向 |
-| 板块涨幅居前 | {self._format_board_rankings(board_rankings_top, metric_key='change_pct', suffix='%')} | 市场主线热度 |
-| 板块跌幅居前 | {self._format_board_rankings(board_rankings_bottom, metric_key='change_pct', suffix='%')} | 弱势扩散方向 |
+### A股资金与板块
+main_inflow={self._format_amount(stock_flow.get('main_net_inflow'))} inflow_5d={self._format_amount(stock_flow.get('inflow_5d'))} inflow_10d={self._format_amount(stock_flow.get('inflow_10d'))} dragon_tiger={self._format_dragon_tiger_summary(dragon_tiger_block)} belong_boards={self._format_board_membership(belong_boards)} top_inflow={self._format_sector_flow_items(board_top)} bottom_inflow={self._format_sector_flow_items(board_bottom)} top_gain={self._format_board_rankings(board_rankings_top, metric_key='change_pct', suffix='%')} bottom_loss={self._format_board_rankings(board_rankings_bottom, metric_key='change_pct', suffix='%')}
 """
 
         # 添加筹码分布数据
@@ -1644,14 +1496,8 @@ class GeminiAnalyzer:
             chip = context['chip']
             profit_ratio = chip.get('profit_ratio', 0)
             prompt += f"""
-### 筹码分布数据（效率指标）
-| 指标 | 数值 | 健康标准 |
-|------|------|----------|
-| **获利比例** | **{profit_ratio:.1%}** | 70-90%时警惕 |
-| 平均成本 | {chip.get('avg_cost', 'N/A')} 元 | 现价应高于5-15% |
-| 90%筹码集中度 | {chip.get('concentration_90', 0):.2%} | <15%为集中 |
-| 70%筹码集中度 | {chip.get('concentration_70', 0):.2%} | |
-| 筹码状态 | {chip.get('chip_status', unknown_text)} | |
+### 筹码分布
+profit_ratio={profit_ratio:.1%} avg_cost={chip.get('avg_cost', 'N/A')} concent_90={chip.get('concentration_90', 0):.2%} concent_70={chip.get('concentration_70', 0):.2%} chip_status={chip.get('chip_status', unknown_text)}
 """
         
         # 添加趋势分析结果（仅隐式内建 bull_trend 默认回退保留旧口径）

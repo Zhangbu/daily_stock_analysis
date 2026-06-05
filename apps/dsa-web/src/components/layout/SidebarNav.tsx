@@ -1,6 +1,14 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { BarChart3, BriefcaseBusiness, Home, LayoutDashboard, LogOut, MessageSquareQuote, Settings2, Sparkles, PanelsTopLeft } from 'lucide-react';
+import {
+  BarChart3,
+  BriefcaseBusiness,
+  Home,
+  LogOut,
+  MessageSquareQuote,
+  Settings2,
+  Sparkles,
+} from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAgentChatStore } from '../../stores/agentChatStore';
@@ -25,10 +33,8 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { key: 'home', label: '首页', to: '/', icon: Home, exact: true },
-  { key: 'mag7', label: 'Mag7', to: '/mag7', icon: Sparkles },
-  { key: 'nasdaq100', label: 'Nasdaq-100', to: '/nasdaq100', icon: PanelsTopLeft },
+  { key: 'strategy-lab', label: '策略实验室', to: '/strategy-lab/mag7', icon: Sparkles },
   { key: 'chat', label: '问股', to: '/chat', icon: MessageSquareQuote, badge: 'completion' },
-  { key: 'portfolio-workbench', label: '持仓工作台', to: '/portfolio/workbench', icon: LayoutDashboard },
   { key: 'portfolio', label: '持仓', to: '/portfolio', icon: BriefcaseBusiness },
   { key: 'backtest', label: '回测', to: '/backtest', icon: BarChart3 },
   { key: 'settings', label: '设置', to: '/settings', icon: Settings2 },
@@ -72,7 +78,7 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({ collapsed = false, onNav
             {({ isActive }) => (
               <>
                 {isActive && (
-                  <motion.div 
+                  <motion.div
                     layoutId="activeIndicator"
                     className="absolute top-0 bottom-0 left-0 w-[var(--nav-indicator-width)] bg-[var(--nav-indicator-bg)] shadow-[0_0_10px_var(--nav-indicator-shadow)]"
                     initial={{ opacity: 0 }}

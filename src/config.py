@@ -658,7 +658,7 @@ class Config:
     markdown_to_image_max_chars: int = 15000  # 超过此长度不转换，避免超大图片
     md2img_engine: str = "wkhtmltoimage"  # wkhtmltoimage | markdown-to-file (Issue #455, better emoji support)
 
-    # 实时行情预取（Issue #455）：设为 false 可禁用，避免 efinance/akshare_em 全市场拉取
+    # 实时行情预取（Issue #455）：设为 false 可禁用，避免 akshare_em 全市场拉取
     prefetch_realtime_quotes: bool = True
 
     # === 数据库配置 ===
@@ -709,12 +709,12 @@ class Config:
     # 东财接口补丁开关
     enable_eastmoney_patch: bool = False
     # 实时行情数据源优先级（逗号分隔）
-    # 推荐顺序：tencent > akshare_sina > efinance > akshare_em > tushare
+    # 推荐顺序：tencent > akshare_sina > akshare_em > tushare
     # - tencent: 腾讯财经，有量比/换手率/市盈率等，单股查询稳定（推荐）
     # - akshare_sina: 新浪财经，基本行情稳定，但无量比
-    # - efinance/akshare_em: 东财全量接口，数据最全但容易被封
+    # - akshare_em: 东财全量接口，数据最全但容易被封
     # - tushare: Tushare Pro，需要2000积分，数据全面（付费用户可优先使用）
-    realtime_source_priority: str = "tencent,akshare_sina,efinance,akshare_em"
+    realtime_source_priority: str = "tencent,akshare_sina,akshare_em"
     # 实时行情缓存时间（秒）
     realtime_cache_ttl: int = 600
     # 熔断器冷却时间（秒）
@@ -1414,7 +1414,7 @@ class Config:
             # 实时行情数据源优先级：
             # - tencent: 腾讯财经，有量比/换手率/PE/PB等，单股查询稳定（推荐）
             # - akshare_sina: 新浪财经，基本行情稳定，但无量比
-            # - efinance/akshare_em: 东财全量接口，数据最全但容易被封
+            # - akshare_em: 东财全量接口，数据最全但容易被封
             # - tushare: Tushare Pro，需要2000积分，数据全面
             realtime_source_priority=cls._resolve_realtime_source_priority(),
             realtime_cache_ttl=parse_env_int(os.getenv('REALTIME_CACHE_TTL'), 600, field_name='REALTIME_CACHE_TTL', minimum=0),
@@ -1921,7 +1921,7 @@ class Config:
         so that the paid data source is utilized for realtime quotes as well.
         """
         explicit = os.getenv('REALTIME_SOURCE_PRIORITY')
-        default_priority = 'tencent,akshare_sina,efinance,akshare_em'
+        default_priority = 'tencent,akshare_sina,akshare_em'
 
         if explicit:
             # User explicitly set priority, respect it

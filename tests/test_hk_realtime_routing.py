@@ -35,19 +35,19 @@ class TestHKRealtimeRouting(unittest.TestCase):
     def test_manager_routes_hk_suffix_only_to_akshare_once(self, mock_get_config):
         mock_get_config.return_value = SimpleNamespace(
             enable_realtime_quote=True,
-            realtime_source_priority="tencent,akshare_sina,efinance,akshare_em,tushare",
+            realtime_source_priority="tencent,akshare_sina,akshare_em,tushare",
         )
 
-        efinance = _DummyFetcher("EfinanceFetcher", 0, result={"should": "not be called"})
+        first = _DummyFetcher("FirstFetcher", 0, result={"should": "not be called"})
         akshare = _DummyFetcher("AkshareFetcher", 1, result=None)
         tushare = _DummyFetcher("TushareFetcher", 2, result={"should": "not be called"})
 
-        manager = DataFetcherManager(fetchers=[efinance, akshare, tushare])
+        manager = DataFetcherManager(fetchers=[first, akshare, tushare])
         quote = manager.get_realtime_quote("1810.HK")
 
         self.assertIsNone(quote)
         self.assertEqual(akshare.calls, [(("HK01810",), {"source": "hk"})])
-        self.assertEqual(efinance.calls, [])
+        self.assertEqual(first.calls, [])
         self.assertEqual(tushare.calls, [])
 
 

@@ -1367,6 +1367,7 @@ class DatabaseManager:
     def get_analysis_history_paginated(
         self,
         code: Optional[str] = None,
+        operation_advice: Optional[str] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         offset: int = 0,
@@ -1385,23 +1386,14 @@ class DatabaseManager:
         Returns:
             Tuple[List[AnalysisHistory], int]: (记录列表, 总数)
         """
-        from sqlalchemy import func
-        
+        where_clause = self._build_analysis_history_where_clause(
+            code=code,
+            operation_advice=operation_advice,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
         with self.get_session() as session:
-            conditions = []
-            
-            if code:
-                conditions.append(AnalysisHistory.code == code)
-            if start_date:
-                # created_at >= start_date 00:00:00
-                conditions.append(AnalysisHistory.created_at >= datetime.combine(start_date, datetime.min.time()))
-            if end_date:
-                # created_at < end_date+1 00:00:00 (即 <= end_date 23:59:59)
-                conditions.append(AnalysisHistory.created_at < datetime.combine(end_date + timedelta(days=1), datetime.min.time()))
-            
-            # 构建 where 子句
-            where_clause = and_(*conditions) if conditions else True
-            
             # 查询总数
             total_query = select(func.count(AnalysisHistory.id)).where(where_clause)
             total = session.execute(total_query).scalar() or 0
@@ -1417,6 +1409,55 @@ class DatabaseManager:
             results = session.execute(data_query).scalars().all()
             
             return list(results), total
+
+    def list_analysis_history_records(
+        self,
+        code: Optional[str] = None,
+        operation_advice: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        limit: Optional[int] = None,
+    ) -> List[AnalysisHistory]:
+        """List analysis history records with optional filters for review workflows."""
+        where_clause = self._build_analysis_history_where_clause(
+            code=code,
+            operation_advice=operation_advice,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        with self.get_session() as session:
+            query = (
+                select(AnalysisHistory)
+                .where(where_clause)
+                .order_by(desc(AnalysisHistory.created_at))
+            )
+            if limit is not None:
+                query = query.limit(limit)
+            results = session.execute(query).scalars().all()
+            return list(results)
+
+    @staticmethod
+    def _build_analysis_history_where_clause(
+        *,
+        code: Optional[str] = None,
+        operation_advice: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ):
+        """Build shared where-clause for history list/review queries."""
+        conditions = []
+
+        if code:
+            conditions.append(AnalysisHistory.code == code)
+        if operation_advice:
+            conditions.append(AnalysisHistory.operation_advice == operation_advice)
+        if start_date:
+            conditions.append(AnalysisHistory.created_at >= datetime.combine(start_date, datetime.min.time()))
+        if end_date:
+            conditions.append(AnalysisHistory.created_at < datetime.combine(end_date + timedelta(days=1), datetime.min.time()))
+
+        return and_(*conditions) if conditions else True
     
     def get_analysis_history_by_id(self, record_id: int) -> Optional[AnalysisHistory]:
         """

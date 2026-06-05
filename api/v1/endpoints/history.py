@@ -18,6 +18,9 @@ from api.deps import get_database_manager
 from api.v1.schemas.history import (
     HistoryListResponse,
     HistoryItem,
+    HistoryReviewItem,
+    HistoryReviewListResponse,
+    HistoryReviewSummary,
     DeleteHistoryRequest,
     DeleteHistoryResponse,
     NewsIntelItem,
@@ -63,6 +66,7 @@ router = APIRouter()
 )
 def get_history_list(
     stock_code: Optional[str] = Query(None, description="股票代码筛选"),
+    operation_advice: Optional[str] = Query(None, description="操作建议筛选"),
     start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
     page: int = Query(1, ge=1, description="页码（从 1 开始）"),
@@ -91,6 +95,7 @@ def get_history_list(
         # 使用 def 而非 async def，FastAPI 自动在线程池中执行
         result = service.get_history_list(
             stock_code=stock_code,
+            operation_advice=operation_advice,
             start_date=start_date,
             end_date=end_date,
             page=page,
@@ -127,6 +132,96 @@ def get_history_list(
                 "error": "internal_error",
                 "message": f"查询历史列表失败: {str(e)}"
             }
+        )
+
+
+@router.get(
+    "/review",
+    response_model=HistoryReviewListResponse,
+    responses={
+        200: {"description": "历史复盘列表"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取历史分析复盘列表",
+    description="按股票、日期、建议和后验 verdict 查询历史分析的后续表现"
+)
+def get_history_review_list(
+    stock_code: Optional[str] = Query(None, description="股票代码筛选"),
+    operation_advice: Optional[str] = Query(None, description="操作建议筛选"),
+    verdict: Optional[str] = Query(None, description="后验 verdict 筛选：hit/partial/miss"),
+    start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
+    page: int = Query(1, ge=1, description="页码（从 1 开始）"),
+    limit: int = Query(20, ge=1, le=100, description="每页数量"),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> HistoryReviewListResponse:
+    """获取历史分析复盘列表。"""
+    try:
+        service = HistoryService(db_manager)
+        result = service.get_history_review_list(
+            stock_code=stock_code,
+            operation_advice=operation_advice,
+            verdict=verdict,
+            start_date=start_date,
+            end_date=end_date,
+            page=page,
+            limit=limit,
+        )
+        items = [HistoryReviewItem(**item) for item in result.get("items", [])]
+        return HistoryReviewListResponse(
+            total=result.get("total", 0),
+            page=page,
+            limit=limit,
+            items=items,
+        )
+    except Exception as e:
+        logger.error(f"查询历史复盘列表失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "internal_error",
+                "message": f"查询历史复盘列表失败: {str(e)}",
+            },
+        )
+
+
+@router.get(
+    "/review/summary",
+    response_model=HistoryReviewSummary,
+    responses={
+        200: {"description": "历史复盘统计摘要"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取历史分析复盘统计摘要",
+    description="返回当前筛选条件下的历史分析命中率、平均收益与最大浮盈/回撤统计"
+)
+def get_history_review_summary(
+    stock_code: Optional[str] = Query(None, description="股票代码筛选"),
+    operation_advice: Optional[str] = Query(None, description="操作建议筛选"),
+    verdict: Optional[str] = Query(None, description="后验 verdict 筛选：hit/partial/miss"),
+    start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> HistoryReviewSummary:
+    """获取历史分析复盘统计摘要。"""
+    try:
+        service = HistoryService(db_manager)
+        result = service.get_history_review_summary(
+            stock_code=stock_code,
+            operation_advice=operation_advice,
+            verdict=verdict,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return HistoryReviewSummary(**result)
+    except Exception as e:
+        logger.error(f"查询历史复盘统计失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "internal_error",
+                "message": f"查询历史复盘统计失败: {str(e)}",
+            },
         )
 
 

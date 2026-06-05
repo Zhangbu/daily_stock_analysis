@@ -848,27 +848,18 @@ class DataFetcherManager:
         优先级动态调整逻辑：
         - 如果配置了 TUSHARE_TOKEN：Tushare 优先级提升为 0（最高）
         - 否则按默认优先级：
-          0. EfinanceFetcher (Priority 0) - 最高优先级
-          1. AkshareFetcher (Priority 1)
-          2. PytdxFetcher (Priority 2) - 通达信
-          2. TushareFetcher (Priority 2)
-          3. BaostockFetcher (Priority 3)
-          4. YfinanceFetcher (Priority 4)
-          5. LongbridgeFetcher (Priority 5) - 长桥（美股/港股兜底）
+          0. AkshareFetcher (Priority 0) - 最高优先级
+          1. TushareFetcher (Priority 2)
+          2. YfinanceFetcher (Priority 4)
+          3. LongbridgeFetcher (Priority 5) - 长桥（美股/港股兜底）
         """
-        from .efinance_fetcher import EfinanceFetcher
         from .akshare_fetcher import AkshareFetcher
         from .tushare_fetcher import TushareFetcher
-        from .pytdx_fetcher import PytdxFetcher
-        from .baostock_fetcher import BaostockFetcher
         from .yfinance_fetcher import YfinanceFetcher
         from .longbridge_fetcher import LongbridgeFetcher
         # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
-        efinance = EfinanceFetcher()
         akshare = AkshareFetcher()
         tushare = TushareFetcher()  # 会根据 Token 配置自动调整优先级
-        pytdx = PytdxFetcher()      # 通达信数据源（可配 PYTDX_HOST/PYTDX_PORT）
-        baostock = BaostockFetcher()
         yfinance = YfinanceFetcher()
         longbridge = LongbridgeFetcher()  # 长桥（美股/港股兜底，懒加载）
 
@@ -876,11 +867,8 @@ class DataFetcherManager:
         self._ensure_concurrency_guards()
         with self._fetchers_lock:
             self._fetchers = [
-                efinance,
                 akshare,
                 tushare,
-                pytdx,
-                baostock,
                 yfinance,
                 longbridge,
             ]
@@ -1046,13 +1034,13 @@ class DataFetcherManager:
         批量预取实时行情数据（在分析开始前调用）
         
         策略：
-        1. 检查优先级中是否包含全量拉取数据源（efinance/akshare_em）
+        1. 检查优先级中是否包含全量拉取数据源（akshare_em）
         2. 如果不包含，跳过预取（新浪/腾讯是单股票查询，无需预取）
         3. 如果自选股数量 >= 5 且使用全量数据源，则预取填充缓存
         
         这样做的好处：
         - 使用新浪/腾讯时：每只股票独立查询，无全量拉取问题
-        - 使用 efinance/东财时：预取一次，后续缓存命中
+        - 使用 东财接口时：预取一次，后续缓存命中
         
         Args:
             stock_codes: 待分析的股票代码列表
@@ -1081,7 +1069,7 @@ class DataFetcherManager:
         # 注意：新增全量接口（如 tushare_realtime）时需同步更新此列表
         # 全量接口特征：一次 API 调用拉取全市场 5000+ 股票数据
         priority = config.realtime_source_priority.lower()
-        bulk_sources = ['efinance', 'akshare_em', 'tushare']  # 全量接口列表
+        bulk_sources = ['akshare_em', 'tushare']  # 全量接口列表
         
         # 如果优先级中前两个都不是全量数据源，跳过预取
         # 因为新浪/腾讯是单股票查询，不需要预取
@@ -1104,7 +1092,7 @@ class DataFetcherManager:
         
         logger.info(f"[预取] 开始批量预取实时行情，共 {len(stock_codes)} 只股票...")
         
-        # 尝试通过 efinance 或 akshare 预取
+        # 尝试通过 akshare 预取
         # 只需要调用一次 get_realtime_quote，缓存机制会自动拉取全市场数据
         try:
             # 用第一只股票触发全量拉取
@@ -1128,8 +1116,7 @@ class DataFetcherManager:
         
         故障切换策略（按配置的优先级）：
         1. 美股：使用 YfinanceFetcher.get_realtime_quote()
-        2. EfinanceFetcher.get_realtime_quote()
-        3. AkshareFetcher.get_realtime_quote(source="em")  - 东财
+        2. AkshareFetcher.get_realtime_quote(source="em")  - 东财
         4. AkshareFetcher.get_realtime_quote(source="sina") - 新浪
         5. AkshareFetcher.get_realtime_quote(source="tencent") - 腾讯
         6. 返回 None（降级兜底）
@@ -1208,15 +1195,7 @@ class DataFetcherManager:
             try:
                 quote = None
                 
-                if source == "efinance":
-                    # 尝试 EfinanceFetcher
-                    for fetcher in self._get_fetchers_snapshot():
-                        if fetcher.name == "EfinanceFetcher":
-                            if hasattr(fetcher, 'get_realtime_quote'):
-                                quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code)
-                            break
-                
-                elif source == "akshare_em":
+                if source == "akshare_em":
                     # 尝试 AkshareFetcher 东财数据源
                     for fetcher in self._get_fetchers_snapshot():
                         if fetcher.name == "AkshareFetcher":

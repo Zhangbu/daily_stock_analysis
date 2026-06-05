@@ -91,11 +91,11 @@ def _make_pipeline(enable_realtime_quote: bool, realtime_quote=None) -> StockAna
 def test_manager_does_not_warn_when_fallback_source_succeeds(mock_get_config, caplog):
     mock_get_config.return_value = SimpleNamespace(
         enable_realtime_quote=True,
-        realtime_source_priority="efinance,akshare_em",
+        realtime_source_priority="fallback,akshare_em",
     )
     manager = DataFetcherManager(
         fetchers=[
-            _DummyFetcher("EfinanceFetcher", 0, error=RuntimeError("efinance timeout")),
+            _DummyFetcher("FallbackFetcher", 0, error=RuntimeError("fallback timeout")),
             _DummyFetcher("AkshareFetcher", 1, result=_make_quote()),
         ]
     )
@@ -132,11 +132,11 @@ def test_event_monitor_keeps_manager_failure_summary_for_direct_quote_call(mock_
 
     mock_get_config.return_value = SimpleNamespace(
         enable_realtime_quote=True,
-        realtime_source_priority="efinance",
+        realtime_source_priority="mock",
     )
     manager = DataFetcherManager(
         fetchers=[
-            _DummyFetcher("EfinanceFetcher", 0, error=RuntimeError("efinance timeout")),
+            _DummyFetcher("MockFetcher", 0, error=RuntimeError("mock timeout")),
         ]
     )
     monitor = EventMonitor()
@@ -151,7 +151,7 @@ def test_event_monitor_keeps_manager_failure_summary_for_direct_quote_call(mock_
         result = asyncio.run(monitor._check_price(rule))
 
     assert result is None
-    assert "[实时行情] 600519 所有数据源均失败: [efinance] 失败: efinance timeout" in caplog.text
+    assert "[实时行情] 600519 无可用数据源" in caplog.text
 
 
 def test_pipeline_logs_disabled_realtime_once_without_fetching_quote(caplog):

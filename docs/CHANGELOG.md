@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 修复 `OPENAI_BASE_URL` 搭配带斜杠的 OpenAI 兼容模型名（如 `z-ai/glm-5.1`）时的 LiteLLM 路由兼容性，避免误把上游模型 ID 前缀识别成 provider 并报 `LLM Provider NOT provided`
 - [修复] 为 NVIDIA OpenAI 兼容模型 `z-ai/glm-5.1` 注册 LiteLLM 自定义价格元数据，避免推理成功后在响应成本统计阶段输出 `response_cost_failure_debug_information`
 - [改进] 新增 `LLM_REQUEST_TIMEOUT_SECONDS` 与 `LLM_REQUEST_MAX_RETRIES` 配置，并将其接入 LiteLLM/OpenAI 兼容调用链，避免上游网关长时间超时重试时首页只表现为“无结果”而迟迟不显式失败
+- [新功能] 新增“历史复盘”页与 `/api/v1/history/review`、`/api/v1/history/review/summary` 接口，可按股票/日期/操作建议横向查看历史分析的 T+1/T+5/T+10、最大浮盈、最大回撤与命中结果
 - [修复] 修复 Windows 桌面端转抄后端 stdout/stderr 时中文日志可能乱码的问题，统一优先使用 UTF-8 并兼容本地代码页回退
 - [改进] Docker 发布工作流收敛为更清晰的正式发布与手动补发链路，并统一官方 Docker Hub 镜像名为 `zhulinsen/daily_stock_analysis`
 - [文档] 补充官方镜像拉取、`docker run` 用法与 `.env` / 数据目录映射说明，不再仅覆盖 Compose 部署路径

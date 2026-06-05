@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-AkshareFetcher - 主数据源 (Priority 1)
+AkshareFetcher - 主数据源 (Priority 0)
 ===================================
 
 数据来源：
@@ -265,7 +265,7 @@ class AkshareFetcher(BaseFetcher):
     """
     
     name = "AkshareFetcher"
-    priority = int(os.getenv("AKSHARE_PRIORITY", "1"))
+    priority = int(os.getenv("AKSHARE_PRIORITY", "0"))
     
     def __init__(self, sleep_min: float = 2.0, sleep_max: float = 5.0):
         """
@@ -1803,6 +1803,64 @@ class AkshareFetcher(BaseFetcher):
         
         except Exception as e:
             logger.error(f"[Akshare] 新浪接口获取板块排行也失败: {e}")
+            return None
+
+    def get_belong_board(self, stock_code: str) -> Optional[pd.DataFrame]:
+        """
+        获取股票所属板块。
+
+        通过东方财富 HTTP API 获取（与 efinance 底层相同）。
+
+        Args:
+            stock_code: 股票代码，如 600519
+
+        Returns:
+            DataFrame: columns [股票名称, 股票代码, 板块代码, 板块名称, 板块涨幅]
+        """
+        base = stock_code.strip().split(".")[0]
+        # Eastmoney secid: 1.xxxx for Shanghai, 0.xxxx for Shenzhen
+        secid = f"0.{base}"
+        if base.startswith(("6", "5", "90")):
+            secid = f"1.{base}"
+
+        params = {
+            "forcect": "1",
+            "spt": "3",
+            "fields": "f12,f14,f3",
+            "pi": "0",
+            "pz": "1000",
+            "po": "1",
+            "fid": "f3",
+            "fid0": "f4003",
+            "invt": "2",
+            "secid": secid,
+        }
+
+        try:
+            self._enforce_rate_limit()
+            resp = requests.get(
+                "https://push2.eastmoney.com/api/qt/slist/get",
+                params=params,
+                timeout=15,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            diff = data.get("data", {}).get("diff")
+            if not diff:
+                return None
+
+            df = pd.DataFrame(diff).T
+            df.reset_index(drop=True, inplace=True)
+            col_map = {"f12": "板块代码", "f14": "板块名称", "f3": "板块涨幅"}
+            df = df.rename(columns=col_map)[list(col_map.values())]
+            df["板块涨幅"] = pd.to_numeric(df["板块涨幅"], errors="coerce") / 100
+            df.insert(0, "股票名称", base)
+            df.insert(1, "股票代码", base)
+            return df
+
+        except Exception as e:
+            logger.error(f"[Akshare] 获取 {stock_code} 所属板块失败: {e}")
             return None
 
 

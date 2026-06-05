@@ -63,6 +63,49 @@ class HistoryListResponse(BaseModel):
         }
 
 
+class HistoryReviewItem(BaseModel):
+    """历史分析复盘条目"""
+
+    id: int = Field(..., description="分析历史记录主键 ID")
+    query_id: str = Field(..., description="关联 query_id")
+    stock_code: str = Field(..., description="股票代码")
+    stock_name: Optional[str] = Field(None, description="股票名称")
+    created_at: Optional[str] = Field(None, description="分析记录创建时间")
+    analysis_date: Optional[str] = Field(None, description="用于复盘锚定的行情日期")
+    operation_advice: Optional[str] = Field(None, description="当时操作建议")
+    sentiment_score: Optional[int] = Field(None, description="当时情绪评分")
+    entry_price: Optional[float] = Field(None, description="分析时参考价格")
+    verdict: Optional[str] = Field(None, description="后验判断：hit/partial/miss")
+    observation_days: int = Field(0, description="实际可复盘交易日数量")
+    t1_return_pct: Optional[float] = Field(None, description="T+1 收益率(%)")
+    t5_return_pct: Optional[float] = Field(None, description="T+5 收益率(%)")
+    t10_return_pct: Optional[float] = Field(None, description="T+10 收益率(%)")
+    max_upside_pct: Optional[float] = Field(None, description="观察窗口内最大浮盈(%)")
+    max_drawdown_pct: Optional[float] = Field(None, description="观察窗口内最大回撤(%)")
+
+
+class HistoryReviewListResponse(BaseModel):
+    """历史复盘列表响应"""
+
+    total: int = Field(..., description="总记录数")
+    page: int = Field(..., description="当前页码")
+    limit: int = Field(..., description="每页数量")
+    items: List[HistoryReviewItem] = Field(default_factory=list, description="复盘记录列表")
+
+
+class HistoryReviewSummary(BaseModel):
+    """历史复盘统计摘要"""
+
+    total: int = Field(..., description="纳入统计的复盘条数")
+    hit_rate_pct: Optional[float] = Field(None, description="命中率(%)")
+    avg_t1_return_pct: Optional[float] = Field(None, description="平均 T+1 收益率(%)")
+    avg_t5_return_pct: Optional[float] = Field(None, description="平均 T+5 收益率(%)")
+    avg_t10_return_pct: Optional[float] = Field(None, description="平均 T+10 收益率(%)")
+    avg_max_upside_pct: Optional[float] = Field(None, description="平均最大浮盈(%)")
+    avg_max_drawdown_pct: Optional[float] = Field(None, description="平均最大回撤(%)")
+    verdict_counts: Any = Field(default_factory=dict, description="各 verdict 数量统计")
+
+
 class DeleteHistoryRequest(BaseModel):
     """删除历史记录请求"""
 

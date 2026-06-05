@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
 
 from src.config import get_config, resolve_news_window_days
+from src.core.trading_calendar import get_market_for_stock
 from src.report_language import (
     get_bias_status_emoji,
     get_localized_stock_name,
@@ -81,6 +82,7 @@ class HistoryService:
     def get_history_list(
         self,
         stock_code: Optional[str] = None,
+        operation_advice: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         page: int = 1,
@@ -122,6 +124,7 @@ class HistoryService:
             # Use new paginated query method
             records, total = self.db.get_analysis_history_paginated(
                 code=stock_code,
+                operation_advice=operation_advice,
                 start_date=start_dt,
                 end_date=end_dt,
                 offset=offset,
@@ -150,6 +153,89 @@ class HistoryService:
         except Exception as e:
             logger.error(f"查询历史列表失败: {e}", exc_info=True)
             return {"total": 0, "items": []}
+
+    def get_history_review_list(
+        self,
+        stock_code: Optional[str] = None,
+        operation_advice: Optional[str] = None,
+        verdict: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Return paginated post-analysis review rows for historical reports."""
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
+        except ValueError as exc:
+            logger.warning("历史复盘日期过滤无效: %s", exc)
+            start_dt = None
+            end_dt = None
+
+        records = self.db.list_analysis_history_records(
+            code=stock_code,
+            operation_advice=operation_advice,
+            start_date=start_dt,
+            end_date=end_dt,
+        )
+        rows = [self._build_review_row(record) for record in records]
+        if verdict:
+            rows = [row for row in rows if row.get("verdict") == verdict]
+
+        total = len(rows)
+        offset = max(0, (page - 1) * limit)
+        paged_rows = rows[offset:offset + limit]
+        return {
+            "total": total,
+            "items": paged_rows,
+        }
+
+    def get_history_review_summary(
+        self,
+        stock_code: Optional[str] = None,
+        operation_advice: Optional[str] = None,
+        verdict: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return aggregate post-analysis review statistics."""
+        payload = self.get_history_review_list(
+            stock_code=stock_code,
+            operation_advice=operation_advice,
+            verdict=verdict,
+            start_date=start_date,
+            end_date=end_date,
+            page=1,
+            limit=10_000,
+        )
+        rows = payload["items"]
+
+        def _avg(values: List[Optional[float]]) -> Optional[float]:
+            numeric = [float(v) for v in values if v is not None]
+            if not numeric:
+                return None
+            return round(sum(numeric) / len(numeric), 2)
+
+        verdict_counts = {"hit": 0, "partial": 0, "miss": 0}
+        for row in rows:
+            key = row.get("verdict")
+            if key in verdict_counts:
+                verdict_counts[key] += 1
+
+        reviewed_count = len(rows)
+        hit_rate_pct = round(verdict_counts["hit"] / reviewed_count * 100, 2) if reviewed_count else None
+
+        return {
+            "total": reviewed_count,
+            "verdict_counts": verdict_counts,
+            "hit_rate_pct": hit_rate_pct,
+            "avg_t1_return_pct": _avg([row.get("t1_return_pct") for row in rows]),
+            "avg_t5_return_pct": _avg([row.get("t5_return_pct") for row in rows]),
+            "avg_t10_return_pct": _avg([row.get("t10_return_pct") for row in rows]),
+            "avg_max_upside_pct": _avg([row.get("max_upside_pct") for row in rows]),
+            "avg_max_drawdown_pct": _avg([row.get("max_drawdown_pct") for row in rows]),
+        }
 
     def _resolve_record(self, record_id: str):
         """
@@ -395,6 +481,202 @@ class HistoryService:
             "data_age_days": data_age_days,
             "data_freshness_note": freshness_note,
         }
+
+    def _build_review_row(self, record) -> Dict[str, Any]:
+        """Compute post-analysis validation row from one history record."""
+        raw_result = parse_json_field(record.raw_result)
+        context_snapshot = parse_json_field(record.context_snapshot)
+        market_data_meta = self._build_market_data_meta(
+            code=record.code,
+            context_snapshot=context_snapshot,
+            report_created_at=record.created_at,
+        )
+        analysis_date = self._resolve_analysis_date(
+            market_data_meta=market_data_meta,
+            context_snapshot=context_snapshot,
+            record_created_at=record.created_at,
+        )
+        entry_price = self._resolve_entry_price(raw_result=raw_result, context_snapshot=context_snapshot)
+        follow_up_stats = self._build_follow_up_stats(
+            code=record.code,
+            analysis_date=analysis_date,
+            entry_price=entry_price,
+        )
+        verdict = self._classify_review_verdict(record.operation_advice, follow_up_stats.get("t5_return_pct"))
+
+        return {
+            "id": record.id,
+            "query_id": record.query_id,
+            "stock_code": record.code,
+            "stock_name": record.name,
+            "created_at": record.created_at.isoformat() if record.created_at else None,
+            "operation_advice": record.operation_advice,
+            "sentiment_score": record.sentiment_score,
+            "analysis_date": analysis_date.isoformat() if analysis_date else None,
+            "entry_price": entry_price,
+            "verdict": verdict,
+            **follow_up_stats,
+        }
+
+    def _resolve_analysis_date(
+        self,
+        *,
+        market_data_meta: Dict[str, Any],
+        context_snapshot: Any,
+        record_created_at: Optional[datetime],
+    ) -> Optional[date]:
+        """Resolve the trading date used as the review anchor."""
+        market_data_date = market_data_meta.get("market_data_date")
+        if market_data_date:
+            try:
+                return date.fromisoformat(market_data_date)
+            except ValueError:
+                pass
+
+        if isinstance(context_snapshot, dict):
+            enhanced_context = context_snapshot.get("enhanced_context") or {}
+            if isinstance(enhanced_context, dict):
+                context_date = _coerce_iso_date(enhanced_context.get("date"))
+                if context_date:
+                    try:
+                        return date.fromisoformat(context_date)
+                    except ValueError:
+                        pass
+
+        return record_created_at.date() if record_created_at else None
+
+    @staticmethod
+    def _resolve_entry_price(*, raw_result: Any, context_snapshot: Any) -> Optional[float]:
+        """Resolve the analysis-time entry/reference price."""
+        candidates: List[Any] = []
+        if isinstance(raw_result, dict):
+            candidates.extend(
+                [
+                    raw_result.get("current_price"),
+                    raw_result.get("market_snapshot", {}).get("current_price") if isinstance(raw_result.get("market_snapshot"), dict) else None,
+                ]
+            )
+        if isinstance(context_snapshot, dict):
+            enhanced_context = context_snapshot.get("enhanced_context") or {}
+            if isinstance(enhanced_context, dict):
+                today = enhanced_context.get("today") or {}
+                realtime = enhanced_context.get("realtime") or {}
+                if isinstance(today, dict):
+                    candidates.append(today.get("close"))
+                if isinstance(realtime, dict):
+                    candidates.append(realtime.get("price"))
+
+        for value in candidates:
+            try:
+                price = float(value)
+            except (TypeError, ValueError):
+                continue
+            if price > 0:
+                return round(price, 4)
+        return None
+
+    def _build_follow_up_stats(
+        self,
+        *,
+        code: str,
+        analysis_date: Optional[date],
+        entry_price: Optional[float],
+    ) -> Dict[str, Any]:
+        """Compute T+1/T+5/T+10 and excursion metrics from stock_daily."""
+        empty_stats = {
+            "observation_days": 0,
+            "t1_return_pct": None,
+            "t5_return_pct": None,
+            "t10_return_pct": None,
+            "max_upside_pct": None,
+            "max_drawdown_pct": None,
+        }
+        if analysis_date is None or entry_price is None or entry_price <= 0:
+            return empty_stats
+
+        market = get_market_for_stock(code)
+        df = self.db.get_daily_data_frame(
+            code=code,
+            start_date=analysis_date,
+            end_date=analysis_date + timedelta(days=40),
+            market=market,
+            interval="1d",
+        )
+        if df.empty or "date" not in df.columns:
+            return empty_stats
+
+        review_df = df[df["date"].dt.date > analysis_date].copy()
+        if review_df.empty:
+            return empty_stats
+
+        review_df = review_df.sort_values("date").reset_index(drop=True)
+        review_window = review_df.head(10)
+        stats = {
+            "observation_days": int(len(review_window)),
+            "t1_return_pct": self._return_pct_from_row(review_df, entry_price, 1),
+            "t5_return_pct": self._return_pct_from_row(review_df, entry_price, 5),
+            "t10_return_pct": self._return_pct_from_row(review_df, entry_price, 10),
+            "max_upside_pct": None,
+            "max_drawdown_pct": None,
+        }
+
+        try:
+            max_high = float(review_window["high"].dropna().max())
+            stats["max_upside_pct"] = round((max_high - entry_price) / entry_price * 100, 2)
+        except Exception:
+            stats["max_upside_pct"] = None
+
+        try:
+            min_low = float(review_window["low"].dropna().min())
+            stats["max_drawdown_pct"] = round((min_low - entry_price) / entry_price * 100, 2)
+        except Exception:
+            stats["max_drawdown_pct"] = None
+
+        return stats
+
+    @staticmethod
+    def _return_pct_from_row(df, entry_price: float, offset_days: int) -> Optional[float]:
+        if len(df) < offset_days:
+            return None
+        try:
+            close_price = float(df.iloc[offset_days - 1]["close"])
+        except (TypeError, ValueError, KeyError):
+            return None
+        if close_price <= 0:
+            return None
+        return round((close_price - entry_price) / entry_price * 100, 2)
+
+    @staticmethod
+    def _classify_review_verdict(operation_advice: Optional[str], t5_return_pct: Optional[float]) -> Optional[str]:
+        """Roughly classify whether one historical recommendation proved accurate."""
+        if t5_return_pct is None:
+            return None
+
+        advice = (operation_advice or "").strip().lower()
+        bullish_keywords = ("买", "加仓", "增持", "buy", "accumulate", "bull")
+        bearish_keywords = ("卖", "减仓", "止盈", "sell", "reduce", "trim")
+
+        if any(keyword in advice for keyword in bullish_keywords):
+            if t5_return_pct >= 2:
+                return "hit"
+            if t5_return_pct >= 0:
+                return "partial"
+            return "miss"
+
+        if any(keyword in advice for keyword in bearish_keywords):
+            if t5_return_pct <= -2:
+                return "hit"
+            if t5_return_pct <= 0:
+                return "partial"
+            return "miss"
+
+        # 持有 / 观望 / 中性建议：波动较小视为命中，否则视为偏差
+        abs_return = abs(t5_return_pct)
+        if abs_return <= 3:
+            return "hit"
+        if abs_return <= 6:
+            return "partial"
+        return "miss"
 
     def delete_history_records(self, record_ids: List[int]) -> int:
         """

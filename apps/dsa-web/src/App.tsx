@@ -8,9 +8,7 @@ import LoginPage from './pages/LoginPage';
 import NotFoundPage from './pages/NotFoundPage';
 import ChatPage from './pages/ChatPage';
 import PortfolioPage from './pages/PortfolioPage';
-import PortfolioWorkbenchPage from './pages/PortfolioWorkbenchPage';
-import Mag7Page from './pages/Mag7Page';
-import Nasdaq100Page from './pages/Nasdaq100Page';
+import StrategyLabPage from './pages/StrategyLabPage';
 import { ApiErrorAlert, Shell } from './components/common';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useAgentChatStore } from './stores/agentChatStore';
@@ -65,10 +63,11 @@ const AppContent: React.FC = () => {
     <Routes>
       <Route element={<Shell />}>
         <Route path="/" element={<HomePage />} />
-        <Route path="/mag7" element={<Mag7Page />} />
-        <Route path="/nasdaq100" element={<Nasdaq100Page />} />
+        <Route path="/strategy-lab/:profileName" element={<StrategyLabPage />} />
+        {/* redirect legacy routes */}
+        <Route path="/mag7" element={<Navigate to="/strategy-lab/mag7" replace />} />
+        <Route path="/nasdaq100" element={<Navigate to="/strategy-lab/nasdaq100" replace />} />
         <Route path="/chat" element={<ChatPage />} />
-        <Route path="/portfolio/workbench" element={<PortfolioWorkbenchPage />} />
         <Route path="/portfolio" element={<PortfolioPage />} />
         <Route path="/backtest" element={<BacktestPage />} />
         <Route path="/settings" element={<SettingsPage />} />

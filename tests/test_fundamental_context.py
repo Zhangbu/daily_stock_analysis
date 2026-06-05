@@ -110,7 +110,7 @@ class TestFundamentalContext(unittest.TestCase):
             rankings=([{"name": "半导体", "change_pct": 1.0}], [{"name": "消费", "change_pct": -1.0}]),
         )
         efinance = _DummyFetcher(
-            "EfinanceFetcher",
+            "MockFetcher",
             priority=0,
             rankings=([{"name": "地产", "change_pct": 2.0}], [{"name": "煤炭", "change_pct": -2.0}]),
         )
@@ -419,7 +419,7 @@ class TestFundamentalContext(unittest.TestCase):
 
     def test_get_belong_boards_from_capability_probe(self) -> None:
         fetcher = _DummyBoardFetcher(
-            "EfinanceFetcher",
+            "MockFetcher",
             priority=0,
             boards=[{"name": "白酒"}, {"board_name": "消费"}],
         )
@@ -431,7 +431,7 @@ class TestFundamentalContext(unittest.TestCase):
 
     def test_get_belong_boards_preserves_cn_code_and_type_fields(self) -> None:
         fetcher = _DummyBoardFetcher(
-            "EfinanceFetcher",
+            "MockFetcher",
             priority=0,
             boards=[
                 {"板块名称": "白酒", "板块代码": "BK0815", "板块类型": "行业"},
@@ -452,7 +452,7 @@ class TestFundamentalContext(unittest.TestCase):
 
     def test_get_belong_boards_supports_extended_name_aliases_in_dict_payload(self) -> None:
         fetcher = _DummyBoardFetcher(
-            "EfinanceFetcher",
+            "MockFetcher",
             priority=0,
             boards=[
                 {"所属板块": "新能源"},

@@ -134,6 +134,7 @@ python main.py --profile mag7 --stocks AAPL,NVDA,MSFT
 - `/backtest` 页面现在同时支持原有 A 股历史分析回测，以及 `mag7` / `nasdaq100` 的 profile 策略回测，无需额外打开新页面
 - Profile 策略回测结果会写入 SQLite，刷新 `/backtest` 页面后仍可恢复最近一次相同画像/策略/窗口的回测汇总与信号结果
 - Profile 策略回测结果支持按股票代码、结果类型（win/loss/neutral）、收益字段与日期进行分页查询和排序，更适合在 `Nasdaq-100` 这种大股票池中做横向比较
+- Web 工作台新增 `历史复盘` 页面，可按股票、日期、操作建议和命中结果横向查看历史分析的 `T+1 / T+5 / T+10`、最大浮盈和最大回撤，帮助判断分析体系是否真正有效
 
 ### 方式一：GitHub Actions（推荐）
 

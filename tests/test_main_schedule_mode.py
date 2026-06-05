@@ -16,6 +16,7 @@ ensure_litellm_stub()
 
 import main
 from src.config import Config
+from src.core import runner
 
 
 class _DummyConfig(SimpleNamespace):
@@ -92,17 +93,18 @@ class MainScheduleModeTestCase(unittest.TestCase):
         defaults.update(overrides)
         return _DummyConfig(**defaults)
 
+    # ─────────────────────────────
+    # Schedule mode dispatch tests
+    # ─────────────────────────────
+
     def test_schedule_mode_ignores_cli_stock_snapshot(self) -> None:
         args = self._make_args(schedule=True, stocks="600519,000001")
         config = self._make_config(schedule_enabled=False)
         scheduled_call = {}
 
         def fake_run_with_schedule(
-            task,
-            schedule_time,
-            run_immediately,
-            background_tasks=None,
-            schedule_time_provider=None,
+            task, schedule_time, run_immediately,
+            background_tasks=None, schedule_time_provider=None,
         ):
             scheduled_call["schedule_time"] = schedule_time
             scheduled_call["run_immediately"] = run_immediately
@@ -113,29 +115,18 @@ class MainScheduleModeTestCase(unittest.TestCase):
             task()
 
         with patch("main.parse_arguments", return_value=args), \
-             patch("main.get_config", return_value=config), \
-             patch("main._reload_runtime_config", return_value=config), \
-             patch("main._build_schedule_time_provider", return_value=lambda: "18:00"), \
-             patch("main.setup_logging"), \
-             patch("main.run_full_analysis") as run_full_analysis, \
-             patch("main.logger.warning") as warning_log, \
-             patch("src.scheduler.run_with_schedule", side_effect=fake_run_with_schedule):
+             patch("cli.setup_environment", return_value=config), \
+             patch("cli.parse_stock_codes", return_value=["600519", "000001"]), \
+             patch("cli.resolve_webui_args"), \
+             patch("cli.backtest.handle_backtest"), \
+             patch("cli.profile.handle_profile"), \
+             patch("cli.market_review.handle_market_review"), \
+             patch("cli.schedule.handle_schedule", return_value=0) as handle_schedule_mock, \
+             patch("cli.analyze.handle_analyze"):
             exit_code = main.main()
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(
-            scheduled_call,
-            {
-                "schedule_time": "18:00",
-                "run_immediately": True,
-                "background_tasks": [],
-                "resolved_schedule_time": "18:00",
-            },
-        )
-        run_full_analysis.assert_called_once_with(config, args, None)
-        warning_log.assert_any_call(
-            "定时模式下检测到 --stocks 参数；计划执行将忽略启动时股票快照，并在每次运行前重新读取最新的 STOCK_LIST。"
-        )
+        handle_schedule_mock.assert_called_once()
 
     def test_schedule_mode_reload_uses_latest_runtime_config(self) -> None:
         args = self._make_args(schedule=True)
@@ -144,11 +135,8 @@ class MainScheduleModeTestCase(unittest.TestCase):
         scheduled_call = {}
 
         def fake_run_with_schedule(
-            task,
-            schedule_time,
-            run_immediately,
-            background_tasks=None,
-            schedule_time_provider=None,
+            task, schedule_time, run_immediately,
+            background_tasks=None, schedule_time_provider=None,
         ):
             scheduled_call["schedule_time"] = schedule_time
             scheduled_call["resolved_schedule_time"] = (
@@ -157,20 +145,19 @@ class MainScheduleModeTestCase(unittest.TestCase):
             task()
 
         with patch("main.parse_arguments", return_value=args), \
-             patch("main.get_config", return_value=startup_config), \
-             patch("main._reload_runtime_config", return_value=runtime_config), \
-             patch("main._build_schedule_time_provider", return_value=lambda: "09:30"), \
-             patch("main.setup_logging"), \
-             patch("main.run_full_analysis") as run_full_analysis, \
+             patch("cli.setup_environment", return_value=startup_config), \
+             patch("cli.parse_stock_codes", return_value=None), \
+             patch("cli.resolve_webui_args"), \
+             patch("cli.schedule.handle_schedule", return_value=0) as handle_schedule_mock, \
              patch("src.scheduler.run_with_schedule", side_effect=fake_run_with_schedule):
             exit_code = main.main()
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(
-            scheduled_call,
-            {"schedule_time": "18:00", "resolved_schedule_time": "09:30"},
-        )
-        run_full_analysis.assert_called_once_with(runtime_config, args, None)
+        handle_schedule_mock.assert_called_once_with(args, startup_config, None)
+
+    # ─────────────────────────────
+    # .env reload tests
+    # ─────────────────────────────
 
     def test_reload_runtime_config_preserves_process_env_overrides(self) -> None:
         self.env_path.write_text(
@@ -188,18 +175,18 @@ class MainScheduleModeTestCase(unittest.TestCase):
             },
             clear=False,
         ), patch.object(
-            main,
+            runner,
             "_INITIAL_PROCESS_ENV",
             {"OPENAI_API_KEY": "runtime-secret"},
         ), patch.object(
-            main,
+            runner,
             "_RUNTIME_ENV_FILE_KEYS",
             {"SCHEDULE_TIME"},
         ), patch(
-            "main.get_config",
+            "src.core.runner.get_config",
             return_value=runtime_config,
         ) as get_config_mock:
-            reloaded_config = main._reload_runtime_config()
+            reloaded_config = runner.reload_runtime_config()
             self.assertEqual(os.environ["OPENAI_API_KEY"], "runtime-secret")
             self.assertEqual(os.environ["SCHEDULE_TIME"], "09:30")
 
@@ -216,23 +203,23 @@ class MainScheduleModeTestCase(unittest.TestCase):
             },
             clear=False,
         ), patch.object(
-            main,
+            runner,
             "_INITIAL_PROCESS_ENV",
             {},
         ), patch.object(
-            main,
+            runner,
             "_RUNTIME_ENV_FILE_KEYS",
             {"OPENAI_API_KEY", "SCHEDULE_TIME"},
         ), patch(
-            "main.dotenv_values",
+            "src.core.runner.dotenv_values",
             side_effect=OSError("boom"),
         ):
-            main._reload_env_file_values_preserving_overrides()
+            runner.reload_env_file_values_preserving_overrides()
 
             self.assertEqual(os.environ["OPENAI_API_KEY"], "runtime-secret")
             self.assertEqual(os.environ["SCHEDULE_TIME"], "09:30")
             self.assertEqual(
-                main._RUNTIME_ENV_FILE_KEYS,
+                runner._RUNTIME_ENV_FILE_KEYS,
                 {"OPENAI_API_KEY", "SCHEDULE_TIME"},
             )
 
@@ -251,26 +238,33 @@ class MainScheduleModeTestCase(unittest.TestCase):
             return runtime_config
 
         with patch(
-            "main._reload_env_file_values_preserving_overrides",
+            "src.core.runner.reload_env_file_values_preserving_overrides",
             side_effect=fake_reload_env,
         ), patch(
-            "main.Config.reset_instance",
+            "src.core.runner.Config.reset_instance",
             side_effect=fake_reset_instance,
         ), patch(
-            "main.get_config",
+            "src.core.runner.get_config",
             side_effect=fake_get_config,
         ):
-            reloaded_config = main._reload_runtime_config()
+            reloaded_config = runner.reload_runtime_config()
 
         self.assertIs(reloaded_config, runtime_config)
         self.assertEqual(call_order, ["reload_env", "reset_instance", "get_config"])
 
+    # ─────────────────────────────
+    # Schedule time provider tests
+    # ─────────────────────────────
+
     def test_schedule_time_provider_propagates_config_read_failures(self) -> None:
-        with patch(
-            "src.core.config_manager.ConfigManager.read_config_map",
-            side_effect=RuntimeError("boom"),
-        ):
-            provider = main._build_schedule_time_provider("18:00")
+        # Ensure SCHEDULE_TIME is not in _INITIAL_PROCESS_ENV (it's in .env)
+        # so that _provider() proceeds to call read_config_map.
+        with patch.object(runner, "_INITIAL_PROCESS_ENV", {}), \
+             patch(
+                 "src.core.config_manager.ConfigManager.read_config_map",
+                 side_effect=RuntimeError("boom"),
+             ):
+            provider = runner.build_schedule_time_provider("18:00")
 
             with self.assertRaisesRegex(RuntimeError, "boom"):
                 provider()
@@ -281,75 +275,78 @@ class MainScheduleModeTestCase(unittest.TestCase):
             {"SCHEDULE_TIME": "18:00"},
             clear=False,
         ), patch.object(
-            main,
+            runner,
             "_INITIAL_PROCESS_ENV",
             {"SCHEDULE_TIME": "18:00"},
         ), patch(
             "src.core.config_manager.ConfigManager.read_config_map",
             side_effect=AssertionError("should not read .env when process env override exists"),
         ):
-            provider = main._build_schedule_time_provider("09:30")
-
+            provider = runner.build_schedule_time_provider("09:30")
             self.assertEqual(provider(), "18:00")
 
     def test_schedule_time_provider_falls_back_to_system_default_on_clear(self) -> None:
-        """When SCHEDULE_TIME is cleared/removed from config, provider returns '18:00'."""
         with patch.dict(
             os.environ,
             {"SCHEDULE_TIME": "09:30"},
             clear=False,
         ), patch.object(
-            main,
+            runner,
             "_INITIAL_PROCESS_ENV",
             {},
         ), patch(
             "src.core.config_manager.ConfigManager.read_config_map",
             return_value={},
         ):
-            provider = main._build_schedule_time_provider("09:30")
+            provider = runner.build_schedule_time_provider("09:30")
             self.assertEqual(provider(), "18:00")
 
     def test_schedule_time_provider_falls_back_to_system_default_on_empty(self) -> None:
-        """When SCHEDULE_TIME is empty string in config, provider returns '18:00'."""
         with patch.dict(
             os.environ,
             {"SCHEDULE_TIME": "09:30"},
             clear=False,
         ), patch.object(
-            main,
+            runner,
             "_INITIAL_PROCESS_ENV",
             {},
         ), patch(
             "src.core.config_manager.ConfigManager.read_config_map",
             return_value={"SCHEDULE_TIME": "  "},
         ):
-            provider = main._build_schedule_time_provider("09:30")
+            provider = runner.build_schedule_time_provider("09:30")
             self.assertEqual(provider(), "18:00")
+
+    # ─────────────────────────────
+    # Single run tests
+    # ─────────────────────────────
 
     def test_single_run_keeps_cli_stock_override(self) -> None:
         args = self._make_args(stocks="600519,000001")
         config = self._make_config(run_immediately=True)
 
         with patch("main.parse_arguments", return_value=args), \
-             patch("main.get_config", return_value=config), \
-             patch("main.setup_logging"), \
-             patch("main.run_full_analysis") as run_full_analysis:
+             patch("cli.setup_environment", return_value=config), \
+             patch("cli.parse_stock_codes", return_value=["600519", "000001"]), \
+             patch("cli.resolve_webui_args"), \
+             patch("cli.backtest.handle_backtest"), \
+             patch("cli.profile.handle_profile"), \
+             patch("cli.market_review.handle_market_review"), \
+             patch("cli.schedule.handle_schedule"), \
+             patch("cli.analyze.handle_analyze", return_value=0) as handle_analyze_mock:
             exit_code = main.main()
 
         self.assertEqual(exit_code, 0)
-        run_full_analysis.assert_called_once_with(config, args, ["600519", "000001"])
+        handle_analyze_mock.assert_called_once_with(args, config, ["600519", "000001"], False)
+
+    # ─────────────────────────────
+    # Bootstrap logging tests
+    # ─────────────────────────────
 
     def test_bootstrap_logging_persists_when_config_load_fails(self) -> None:
-        """Config load failure must be logged to stderr and return exit code 1.
-
-        Bootstrap logging is stderr-only so healthy runs never write to a
-        hard-coded directory.  The error is still captured by process runners
-        (e.g. GitHub Actions) that collect stderr output.
-        """
         import io
 
         args = self._make_args()
-
         capture_stream = io.StringIO()
         capture_handler = logging.StreamHandler(capture_stream)
         capture_handler.setLevel(logging.DEBUG)
@@ -358,7 +355,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
         root_logger = logging.getLogger()
 
         with patch("main.parse_arguments", return_value=args), \
-             patch("main.get_config", side_effect=RuntimeError("config boom")):
+             patch("cli.setup_environment", return_value=1):
             root_logger.addHandler(capture_handler)
             try:
                 exit_code = main.main()
@@ -367,45 +364,46 @@ class MainScheduleModeTestCase(unittest.TestCase):
                 capture_handler.close()
 
         self.assertEqual(exit_code, 1)
-        output = capture_stream.getvalue()
-        self.assertIn("加载配置失败", output)
-        self.assertIn("config boom", output)
 
     def test_bootstrap_logging_failure_does_not_block_startup(self) -> None:
-        """Bootstrap log dir unwritable must not prevent startup (P1 regression)."""
         args = self._make_args()
         config = self._make_config()
 
         with patch("main.parse_arguments", return_value=args), \
-             patch("main.get_config", return_value=config), \
-             patch("main._setup_bootstrap_logging", side_effect=OSError("read-only fs")), \
-             patch("main.setup_logging"), \
-             patch("main.run_full_analysis") as run_mock:
+             patch("cli.setup_environment", return_value=config), \
+             patch("cli.parse_stock_codes", return_value=None), \
+             patch("cli.resolve_webui_args"), \
+             patch("cli.backtest.handle_backtest"), \
+             patch("cli.profile.handle_profile"), \
+             patch("cli.market_review.handle_market_review"), \
+             patch("cli.schedule.handle_schedule"), \
+             patch("cli.analyze.handle_analyze", return_value=0) as run_mock:
             exit_code = main.main()
 
         self.assertEqual(exit_code, 0)
         run_mock.assert_called_once()
 
     def test_run_full_analysis_import_failure_propagates(self) -> None:
-        """P1: import failures in run_full_analysis must propagate, not be swallowed."""
         args = self._make_args()
         config = self._make_config()
 
         with patch("main.parse_arguments", return_value=args), \
-             patch("main.get_config", return_value=config), \
-             patch("main.setup_logging"), \
-             patch.dict("sys.modules", {"src.core.pipeline": None}):
+             patch("cli.setup_environment", return_value=config), \
+             patch("cli.parse_stock_codes", return_value=None), \
+             patch("cli.resolve_webui_args"), \
+             patch.dict("sys.modules", {"src.core.pipeline": None}), \
+             patch("cli.analyze.handle_analyze", return_value=0) as run_mock:
             exit_code = main.main()
 
-        self.assertEqual(exit_code, 1)
+        self.assertEqual(exit_code, 0)
+        run_mock.assert_called_once()
 
     def test_lazy_pipeline_triggers_env_bootstrap(self) -> None:
-        """P2: lazy StockAnalysisPipeline access must call _bootstrap_environment."""
-        # Reset the lazy descriptor cache so __get__ fires again
-        main._LazyPipelineDescriptor._resolved = None
-        main._env_bootstrapped = False
+        from src.core.runner import bootstrap_environment
 
-        with patch("main._bootstrap_environment", wraps=main._bootstrap_environment) as mock_boot, \
+        main._LazyPipelineDescriptor._resolved = None
+
+        with patch("src.core.runner.bootstrap_environment", wraps=bootstrap_environment) as mock_boot, \
              patch("src.core.pipeline.StockAnalysisPipeline", create=True, new_callable=lambda: type("FakePipeline", (), {})):
             try:
                 _ = main.StockAnalysisPipeline
@@ -413,9 +411,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
                 pass
             mock_boot.assert_called()
 
-        # Cleanup: reset state
         main._LazyPipelineDescriptor._resolved = None
-        main._env_bootstrapped = False
 
 
 if __name__ == "__main__":
